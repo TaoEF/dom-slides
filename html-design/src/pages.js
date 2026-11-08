@@ -1,3 +1,4 @@
+import { artboardSize, setArtboardSize } from "./artboard-size.js";
 import { icon } from "./icons.js";
 import { rekeyDOMIds } from "./identifiers.js";
 export function createPages({
@@ -21,7 +22,7 @@ export function createPages({
   const listUI = ui.querySelector(".thumb-list"),
     thumbs = new Map(),
     sizes = new WeakMap();
-  let renameDraft = null;
+  let renameDraft = null, sizeDraft = null;
   let menuBoard,
     suppressClick = false,
     lastSize = { w: 1280, h: 720 },
@@ -289,6 +290,11 @@ export function createPages({
       id = allocatePage(),
       old = b.dataset.artboard;
     c.dataset.artboard = id;
+    // ID/nth-child-dependent CSS may change when copied; retain source size.
+    const copiedSize = sizeOf(b);
+    const sourceCS = getComputedStyle(b);
+    c.style.setProperty('width', sourceCS.width, b.style.getPropertyPriority('width'));
+    c.style.setProperty('height', sourceCS.height, b.style.getPropertyPriority('height'));
     c.dataset.title = `${b.dataset.title || old} 副本`;
     c.removeAttribute("data-editor-current");
     [c, ...c.querySelectorAll("[contenteditable]")].forEach((n) =>
@@ -304,7 +310,12 @@ export function createPages({
     });
     rekeyDOMIds(c, id);
     transaction(
-      () => b.after(c),
+      () => {
+        b.after(c);
+        try {
+          withAll(() => { if (c.offsetWidth !== copiedSize.w || c.offsetHeight !== copiedSize.h) setArtboardSize(c, copiedSize.w, copiedSize.h); });
+        } catch (error) { c.remove(); throw error; }
+      },
       () => c.remove(),
       c,
     );
@@ -376,6 +387,61 @@ export function createPages({
     input.onkeydown = e => {
       if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(e.key === 'Enter'); }
     };
+  }
+  const sizeDialog = ui.querySelector('.page-size-dialog'), sizeForm = sizeDialog.querySelector('form');
+  const sizeField = name => sizeForm.elements.namedItem(name);
+  function closeSize() {
+    if (sizeDraft?.busy) return;
+    sizeDraft = null; sizeDialog.hidden = true;
+    const focus = thumbs.get(S.current)?.querySelector('.thumb-more') || ui.querySelector('[data-act=page-add]');
+    focus?.focus();
+  }
+  function openSize() {
+    const b = target(); if (!b || !writable() || renameDraft || sizeDraft) return;
+    endText(); select(null); closeMenus(); goTo(b);
+    const value = artboardSize(b);
+    sizeDraft = { board: b, style: b.getAttribute('style'), busy: false };
+    sizeField('width').value = value.width; sizeField('height').value = value.height;
+    ui.querySelector('.size-preset').value = 'custom';
+    ui.querySelector('.size-page').textContent = b.dataset.title || b.dataset.artboard;
+    ui.querySelector('.size-error').hidden = true;
+    sizeDialog.hidden = false; sizeField('width').focus(); sizeField('width').select();
+  }
+  sizeDialog.querySelector('.size-close').onclick = closeSize;
+  sizeDialog.querySelector('.size-cancel').onclick = closeSize;
+  ui.querySelector('.size-preset').onchange = e => {
+    if (e.target.value === 'custom') return;
+    const [w,h] = e.target.value.split(','); sizeField('width').value=w; sizeField('height').value=h;
+  };
+  sizeForm.oninput = e => { ui.querySelector('.size-error').hidden = true; if (e.target.matches('input')) ui.querySelector('.size-preset').value = 'custom'; };
+  sizeForm.onsubmit = async e => {
+    e.preventDefault(); const draft = sizeDraft; if (!draft || draft.busy) return;
+    const w = sizeField('width').valueAsNumber, h = sizeField('height').valueAsNumber;
+    draft.busy = true; sizeForm.querySelector('[type=submit]').disabled = true;
+    try {
+      await execute([draft.board], b => {
+        const current = artboardSize(b);
+        if (current.width === w && current.height === h) return;
+        const change = setArtboardSize(b,w,h);
+        const write = value => value === null ? b.removeAttribute('style') : b.setAttribute('style', value);
+        transaction(() => write(change.after), () => write(change.before), b);
+      }, () => sizeDraft === draft && draft.board.isConnected && draft.board.getAttribute('style') === draft.style, true);
+      draft.busy = false; closeSize();
+    } catch (error) {
+      draft.busy = false;
+      const message = ui.querySelector('.size-error'); message.textContent=error.message; message.hidden=false;
+    } finally { sizeForm.querySelector('[type=submit]').disabled = false; }
+  };
+  function sizeKey(e) {
+    if (sizeDialog.hidden) return false;
+    if (e.key === 'Escape') { e.preventDefault(); closeSize(); }
+    if (e.key === 'Tab') {
+      const controls = [...sizeDialog.querySelectorAll('button,input,select')].filter(n=>!n.disabled);
+      const first=controls[0],last=controls.at(-1);
+      if (e.shiftKey && (ui.activeElement===first || !sizeDialog.contains(ui.activeElement))) {e.preventDefault();last.focus();}
+      if (!e.shiftKey && (ui.activeElement===last || !sizeDialog.contains(ui.activeElement))) {e.preventDefault();first.focus();}
+    }
+    e.stopImmediatePropagation(); return true;
   }
   function startReorder(e, b) {
     if (e.button !== 0 || !writable() || e.detail > 1) return;
@@ -493,7 +559,8 @@ export function createPages({
     moveStep,
     rename,
     key,
-    hasPendingRename: () => !!renameDraft,
+    openSize, sizeKey,
+    hasPendingDraft: () => !!renameDraft || !!sizeDraft,
     clearTarget() {
       menuBoard = null;
     },

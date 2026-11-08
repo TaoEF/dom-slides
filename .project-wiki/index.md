@@ -14,3 +14,5 @@
 
 `raw/` 接收未经核验的资料；Wiki 只保存可追溯的长期事实。
 使用 `npm run wiki:check` 与 `npm run wiki:graph` 检查关系；图谱不入库。
+
+- [Canvas Runtime](contracts/canvas-runtime.md)

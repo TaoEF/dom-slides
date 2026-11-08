@@ -142,3 +142,5 @@ npm run wiki:graph
 ```
 
 CI 检查构建、浏览器行为回归和知识结构。当前仅有本地运行环境；看板的测试服/正式服阶段只有在对应环境和版本证据齐备后才能推进。
+
+当前页菜单 → 画布尺寸：预设或自定义独立宽高，支持撤销/保存；PDF保留每页尺寸，PPTX要求统一比例。面向Agent的[Canvas Runtime](html-design/references/canvas-runtime.md)提供保存快照inspect、有效AI工作副本稀疏apply，并复用既有QA和审阅提交。

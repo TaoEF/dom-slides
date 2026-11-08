@@ -32,3 +32,5 @@
 | 2026-10-30 | Issue #33 在保存快照QA中接入固定本地axe文字对比度规则，独立覆盖所有画板；1:1/复杂背景/缺失报告保留未确认，有界定位与证据。仅QA在强CSP下运行可信异步诊断器，稿件脚本仍禁用，旧文字接口保持隔离契约。 |
 
 | 2026-10-30 | Issue #33 单次审查三项修复：不透明卡片遮住远祖先渐变时保留确定axe事实；原生非文字控件不再把内部value当可见文字；form-only缺标记补TEXT_UNMARKED与不完整覆盖。旧测量接口不变。 |
+
+- 2026-11-09: #35 minimal saved-snapshot inspect/staged sparse edits and #36 independent artboard sizing; bounds and deferred provenance/MCP remain explicit. #37 independent readonly prototype only.

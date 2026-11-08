@@ -5,7 +5,7 @@ status: active
 owners:
   - html-design/src/
   - html-design/editor.js
-updated: 2026-10-30
+updated: 2026-11-09
 sources:
   - path: html-design/src/editor.js
     status: current
@@ -158,3 +158,9 @@ Ctrl/⌘ G、Shift G与菜单共用组合/取消动作及写权限守卫；Ctrl/
 `oriented-selection.js`用visibleMember/groupRoots真实border-box角点沿参考轴投影，重算中心与尺寸；不旋转已经膨胀的BCR。普通单选沿原真实方向，显式组方向=真实渲染父CSS累积方向+可选`data-group-angle-v1`数值；缺字段/非法值按本地0。contents祖先提示不相加。只在有效整体旋转时写归一化方向；直接展开的嵌套语义组一起更新，有盒祖先内组随真实父变换，不再加delta。无第二套矩阵/坐标模型。
 
 选框、旋转中心、屏幕固定圆形手柄与角点局部对角线共用selectionFrame；resize cursor按屏幕方向，反馈/工具条仍水平夹紧。组缩放保持真实对角锚点与原文字/元素下限，临时多选不提供缩放。临时方向只跟当前逻辑成员集合（忽略顺序），换集合重置页面轴；Undo/Redo仅在当前同集合恢复运行态方向，不覆盖另一集合。成员CSS和所有受影响组标量同一snap，cancel/no-op还原字段缺失状态；复制保留组标量、取消组合只解包装。保存/AI交接沿原手势收尾。参考线/QA维持实际AABB，PPTX只读真实成员CSS、不应用提示。
+
+## Independent artboard sizing
+
+Issue36在预览页面菜单增加画布尺寸，页级CSS border-box px，保留box-sizing。预设和自定义只作用当前页；已有响应式内容自然布局，不整体缩放。通过页面管理租约和单步历史保存原style（含缺失）；冲突CSS回滚。尺寸输入草稿阻止外部接管，确认走同一输入保护；复制显式保留源尺寸。artboard-size.js供UI与Runtime复用。Chrome CSSOM设置后removeAttribute可能留下空style，回滚先显式设置原字符串再移除缺失状态。
+
+唯一审查修复：复制尺寸必须用setProperty保留原inline !important；只显示当前页时，复制页的尺寸校验必须在withAll中测量。
