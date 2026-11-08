@@ -158,3 +158,11 @@ Ctrl/⌘ G、Shift G与菜单共用组合/取消动作及写权限守卫；Ctrl/
 `oriented-selection.js`用visibleMember/groupRoots真实border-box角点沿参考轴投影，重算中心与尺寸；不旋转已经膨胀的BCR。普通单选沿原真实方向，显式组方向=真实渲染父CSS累积方向+可选`data-group-angle-v1`数值；缺字段/非法值按本地0。contents祖先提示不相加。只在有效整体旋转时写归一化方向；直接展开的嵌套语义组一起更新，有盒祖先内组随真实父变换，不再加delta。无第二套矩阵/坐标模型。
 
 选框、旋转中心、屏幕固定圆形手柄与角点局部对角线共用selectionFrame；resize cursor按屏幕方向，反馈/工具条仍水平夹紧。组缩放保持真实对角锚点与原文字/元素下限，临时多选不提供缩放。临时方向只跟当前逻辑成员集合（忽略顺序），换集合重置页面轴；Undo/Redo仅在当前同集合恢复运行态方向，不覆盖另一集合。成员CSS和所有受影响组标量同一snap，cancel/no-op还原字段缺失状态；复制保留组标量、取消组合只解包装。保存/AI交接沿原手势收尾。参考线/QA维持实际AABB，PPTX只读真实成员CSS、不应用提示。
+
+## Editable workspace prototype (#37, opt-in branch)
+
+用户反馈将#37原型重点改为编辑与跨画布复用，保留原缩略图导航。独立workspace-view.js只用editor style投影自动排布，不写frame坐标；viewport统一zoom/pan/fit，原Editor/Edit/Done/thumbnail/page/history/persistence保留。data-workspace-prototype仅为独立样例opt-in；非opt-in文件维持原行为，不代表main已发布。
+
+workspace-transfer.js保存临时手势/剪贴板快照：同页逻辑roots跨frame移动保留ID，Alt复制与带内部MIME标识的C/V重新键控ID；typing/外部图片粘贴沿原入口。只有被迁移对象固定computed样式并按落点绝对定位，不拆其他页面；支持正向均匀2D几何，无生成内容，目标结构/样式/几何不等价时拒绝恢复。移动Undo恢复父/次序/属性，复制Undo移除原clone，Redo保留clone身份。不是完整CSS组件移植或跨frame多选。
+
+原型视图坐标、labels、ghost和drop attrs不进序列化/导出；HTML/CSS/DOM继续是真值。旧只读原型保留，新建workspace-editor.html；活跃新稿仍通过begin/commit升级，不直接重建。技术边界与用例见prototypes/README.md和harness实现计划。

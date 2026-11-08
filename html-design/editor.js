@@ -420,6 +420,86 @@ property of their respective owners.
     return [...group.children].map(groupStructureProblem).find(Boolean) || null;
   }
 
+  // html-design/src/selection.js
+  function selectionRoots(nodes) {
+    const unique = [...new Set(nodes)].filter((n) => n?.isConnected);
+    return unique.filter(
+      (n) => !unique.some((other) => other !== n && other.contains(n))
+    );
+  }
+  function unionRect(nodes) {
+    const rects = nodes.map(objectRect);
+    const left = Math.min(...rects.map((r) => r.left)), top = Math.min(...rects.map((r) => r.top));
+    const right = Math.max(...rects.map((r) => r.right)), bottom = Math.max(...rects.map((r) => r.bottom));
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top
+    };
+  }
+  function selectable(board, context = null) {
+    return [...new Set([...(context || board).querySelectorAll("[data-el]")].map((n) => logicalTarget(n, context)))].filter((n) => {
+      if (!n) return false;
+      const r = objectRect(n), s = getComputedStyle(n);
+      return n.closest("[data-artboard]") === board && r.width > 0 && r.height > 0 && s.visibility === "visible" && s.opacity !== "0";
+    });
+  }
+  function directionTarget(nodes, board, key, context = null) {
+    const selected = selectionRoots(nodes);
+    if (!selected.length) return null;
+    const from = objectRect(selected.at(-1));
+    const x = from.left + from.width / 2, y = from.top + from.height / 2;
+    const horizontal = ["ArrowLeft", "ArrowRight"].includes(key), sign = ["ArrowLeft", "ArrowUp"].includes(key) ? -1 : 1;
+    let best = null;
+    for (const node of selectable(board, context)) {
+      if (selected.some((n) => n === node || n.contains(node) || node.contains(n)))
+        continue;
+      const r = objectRect(node), dx = r.left + r.width / 2 - x, dy = r.top + r.height / 2 - y;
+      const forward = (horizontal ? dx : dy) * sign, cross = Math.abs(horizontal ? dy : dx);
+      if (forward <= 1) continue;
+      const score = forward + cross * 2;
+      if (!best || score < best.score) best = { node, score };
+    }
+    return best?.node || null;
+  }
+  function createSelectionOverlay(ui) {
+    const members = document.createElement("div"), marquee = document.createElement("div");
+    members.className = "selection-members";
+    marquee.className = "marquee";
+    marquee.hidden = true;
+    ui.append(members, marquee);
+    return {
+      draw(nodes) {
+        members.replaceChildren();
+        if (nodes.length < 2) return;
+        for (const node of nodes) {
+          const r = objectRect(node), frame = document.createElement("div");
+          frame.className = "selection-member";
+          Object.assign(frame.style, {
+            left: r.left + "px",
+            top: r.top + "px",
+            width: r.width + "px",
+            height: r.height + "px"
+          });
+          members.append(frame);
+        }
+      },
+      marquee(rect) {
+        marquee.hidden = !rect;
+        if (rect)
+          Object.assign(marquee.style, {
+            left: rect.left + "px",
+            top: rect.top + "px",
+            width: rect.width + "px",
+            height: rect.height + "px"
+          });
+      }
+    };
+  }
+
   // html-design/src/oriented-selection.js
   var GROUP_ANGLE = "data-group-angle-v1";
   var sameSelection = (a, b) => a.length === b.length && a.every((n) => b.includes(n));
@@ -473,6 +553,412 @@ property of their respective owners.
   function resizeCursor(handle, angle) {
     const base = { e: 0, se: 45, s: 90, sw: 135, w: 180, nw: 225, n: 270, ne: 315 }[handle];
     return ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"][(Math.round((base + angle) / 45) % 4 + 4) % 4];
+  }
+
+  // html-design/src/identifiers.js
+  function rekeyDOMIds(tree, prefix) {
+    const all = [tree, ...tree.querySelectorAll("*")], ids = /* @__PURE__ */ new Map();
+    for (const node of all)
+      if (node.id) {
+        const old = node.id;
+        node.id = `${prefix}-${old}`;
+        ids.set(old, node.id);
+      }
+    const ordered = [...ids].sort((a, b) => b[0].length - a[0].length);
+    for (const node of all) {
+      for (const attr of [...node.attributes]) {
+        if (["id", "src", "srcset"].includes(attr.name)) continue;
+        let value = attr.value;
+        if (["for", "aria-labelledby", "aria-describedby"].includes(attr.name))
+          value = value.split(" ").map((id) => ids.get(id) || id).join(" ");
+        for (const [before, after] of ordered) {
+          value = value.replaceAll(`url(#${before})`, `url(#${after})`).replaceAll(`url("#${before}")`, `url("#${after}")`).replaceAll(`url('#${before}')`, `url('#${after}')`);
+          if (value === `#${before}`) value = `#${after}`;
+        }
+        if (value !== attr.value) node.setAttribute(attr.name, value);
+      }
+      if (node.matches("style")) {
+        let css = node.textContent;
+        for (const [before, after] of ordered)
+          css = css.replaceAll(`#${before}`, `#${after}`);
+        node.textContent = css;
+      }
+    }
+  }
+
+  // html-design/src/workspace-transfer.js
+  function createWorkspaceTransfer({
+    S,
+    stage,
+    ui,
+    viewport,
+    snap,
+    apply,
+    push,
+    select,
+    activate,
+    elementId,
+    canEdit,
+    toast
+  }) {
+    const enabled = stage.hasAttribute("data-workspace-prototype");
+    let clipboard = null, ghost = null;
+    const all = (roots) => [
+      ...new Set(roots.flatMap((n) => [n, ...n.querySelectorAll("*")]))
+    ];
+    const ignored = /^(cursor|user-select|-webkit-user-select|caret-color|pointer-events|animation.*|transition.*)$/;
+    function capture(roots) {
+      roots = selectionRoots(roots);
+      if (!roots.length) throw new Error("请先选择元素");
+      if (all(roots).length > 500)
+        throw new Error("原型暂支持一次复用最多 500 个节点");
+      const bounds = unionRect(roots), zoom = S.zoom;
+      const objects = roots.map((source) => {
+        const template = source.cloneNode(true), originals = [source, ...source.querySelectorAll("*")], copies = [template, ...template.querySelectorAll("*")], pairs = new Map(originals.map((n, i) => [n, copies[i]]));
+        const ids = new Set(originals.map((n) => n.id).filter(Boolean));
+        for (const node of originals) {
+          if (node.matches("script,iframe,object,embed,video,canvas"))
+            throw new Error("这种内容暂不支持跨画布复用");
+          for (const pseudo of ["::before", "::after"])
+            if (!["none", "normal", '""'].includes(
+              getComputedStyle(node, pseudo).content
+            ))
+              throw new Error("含生成内容的对象暂不支持跨画布复用");
+          const target = pairs.get(node), cs = getComputedStyle(node);
+          target.removeAttribute("contenteditable");
+          target.removeAttribute("data-bbox");
+          target.removeAttribute("data-flow-style");
+          for (const key of cs) {
+            if (ignored.test(key)) continue;
+            let value = cs.getPropertyValue(key);
+            value = value.replace(
+              /url\(["']?[^#"')]*#([^"')]+)["']?\)/g,
+              (match, id) => ids.has(id) ? `url("#${id}")` : match
+            );
+            target.style.setProperty(
+              key,
+              value,
+              node.style.getPropertyPriority(key)
+            );
+          }
+        }
+        const leaves = groupRoots([source]).map((node) => {
+          const g = elementGeometry(node);
+          if (!g.supported) throw new Error("这种变换暂不支持跨画布复用");
+          return { source: node, copy: pairs.get(node), g };
+        });
+        for (const node of originals.filter(isGroup))
+          if (!leaves.some(
+            (leaf) => leaf.source !== node && leaf.source.contains(node)
+          )) {
+            const frame = selectionFrame([node]);
+            if (frame) writeGroupAngle(pairs.get(node), frame.angle);
+          }
+        return { source, template, pairs, leaves };
+      });
+      return {
+        objects,
+        zoom,
+        cx: bounds.left + bounds.width / 2,
+        cy: bounds.top + bounds.height / 2
+      };
+    }
+    function placements(roots) {
+      return roots.map((node) => ({
+        node,
+        parent: node.parentNode,
+        next: node.nextSibling
+      }));
+    }
+    function restore(places) {
+      for (const { node, parent, next } of [...places].reverse())
+        parent.insertBefore(node, next?.parentNode === parent ? next : null);
+    }
+    function clear() {
+      viewport.highlight(null);
+      ghost?.remove();
+      ghost = null;
+    }
+    function begin(roots) {
+      roots = selectionRoots(roots);
+      return {
+        roots,
+        before: snap(all(roots)),
+        places: placements(roots),
+        source: roots[0]?.closest("[data-artboard]")
+      };
+    }
+    function position(node, g, board, cx, cy, zoom) {
+      const r = board.getBoundingClientRect(), cs = getComputedStyle(board), scale = g.scale / zoom;
+      const set = (key, value) => node.style.setProperty(key, value, node.style.getPropertyPriority(key));
+      for (const [key, value] of Object.entries({
+        position: "absolute",
+        inset: "auto",
+        margin: "0px",
+        "box-sizing": "border-box",
+        width: `${g.w}px`,
+        height: `${g.h}px`,
+        "min-width": "0px",
+        "min-height": "0px",
+        "max-width": "none",
+        "max-height": "none",
+        translate: "none",
+        rotate: "none",
+        scale: "none",
+        zoom: "1",
+        "transform-origin": "50% 50%",
+        transform: `rotate(${g.angle}deg) scale(${scale})`,
+        left: `${(cx - r.left) / S.zoom - (parseFloat(cs.borderLeftWidth) || 0) - g.w / 2}px`,
+        top: `${(cy - r.top) / S.zoom - (parseFloat(cs.borderTopWidth) || 0) - g.h / 2}px`
+      }))
+        set(key, value);
+    }
+    function install(packet, board, { copy, center = null } = {}) {
+      const result = [], expected = [];
+      try {
+        for (const object of packet.objects) {
+          const node = copy ? object.template.cloneNode(true) : object.source;
+          const templates = [
+            object.template,
+            ...object.template.querySelectorAll("*")
+          ], nodes = [node, ...node.querySelectorAll("*")];
+          if (!copy)
+            for (let i = 0; i < nodes.length; i++) {
+              const value = templates[i].getAttribute("style");
+              nodes[i].setAttribute("style", value || "");
+              nodes[i].removeAttribute("data-flow-style");
+              nodes[i].removeAttribute("data-bbox");
+              if (templates[i].hasAttribute("data-group-angle-v1"))
+                nodes[i].setAttribute(
+                  "data-group-angle-v1",
+                  templates[i].getAttribute("data-group-angle-v1")
+                );
+            }
+          if (copy) {
+            for (const child of nodes.filter((n) => n.hasAttribute("data-el")))
+              child.dataset.el = elementId(board, "copy");
+            rekeyDOMIds(node, node.dataset.el);
+          }
+          board.append(node);
+          result.push(node);
+          for (const leaf of object.leaves) {
+            const index = templates.indexOf(leaf.copy), target = nodes[index];
+            const cx = center ? center.x + (leaf.g.cx - packet.cx) / packet.zoom * S.zoom : leaf.g.cx, cy = center ? center.y + (leaf.g.cy - packet.cy) / packet.zoom * S.zoom : leaf.g.cy;
+            position(target, leaf.g, board, cx, cy, packet.zoom);
+            expected.push({ node: target, cx, cy, g: leaf.g });
+          }
+        }
+        if (!stableGroupMarkup(board))
+          throw new Error("目标容器无法保留这个对象的 HTML 结构，本次已保留原样");
+        const visual = [
+          "color",
+          "font-family",
+          "font-size",
+          "font-style",
+          "font-weight",
+          "line-height",
+          "letter-spacing",
+          "word-spacing",
+          "text-align",
+          "text-transform",
+          "white-space",
+          "background-color",
+          "opacity",
+          "object-fit",
+          "object-position",
+          "box-shadow"
+        ];
+        for (let i = 0; i < result.length; i++) {
+          const templates = [
+            packet.objects[i].template,
+            ...packet.objects[i].template.querySelectorAll("*")
+          ], nodes = [result[i], ...result[i].querySelectorAll("*")];
+          for (let j = 0; j < nodes.length; j++)
+            for (const key of visual) {
+              const wanted = templates[j].style.getPropertyValue(key);
+              if (wanted && getComputedStyle(nodes[j]).getPropertyValue(key) !== wanted)
+                throw new Error("目标画布的 CSS 改变了对象样式，本次已保留原样");
+            }
+        }
+        for (const item of expected) {
+          const g = elementGeometry(item.node), k = S.zoom / packet.zoom;
+          if (!g.supported || Math.abs(g.cx - item.cx) > 1 || Math.abs(g.cy - item.cy) > 1 || Math.abs(g.w * g.scale - item.g.w * item.g.scale * k) > 1 || Math.abs(g.h * g.scale - item.g.h * item.g.scale * k) > 1)
+            throw new Error("目标画布的 CSS 限制了位置或尺寸，本次已保留原样");
+        }
+        return result;
+      } catch (error) {
+        if (copy) result.forEach((n) => n.remove());
+        throw error;
+      }
+    }
+    function drop(context, event) {
+      clear();
+      if (!enabled || !viewport.workspaceActive() || !event) return false;
+      if (!canEdit()) {
+        apply(context.before);
+        activate(context.source);
+        select(context.roots, true);
+        return true;
+      }
+      const board = viewport.boardAt(event.clientX, event.clientY);
+      if (!board) {
+        apply(context.before);
+        activate(context.source);
+        select(context.roots, true);
+        toast("请拖到画布内，本次已恢复原位置");
+        return true;
+      }
+      if (board === context.source) return false;
+      let inserted = [];
+      const copy = !!event.altKey;
+      try {
+        const packet = capture(context.roots);
+        if (copy) apply(context.before);
+        inserted = install(packet, board, { copy });
+        const after = snap(all(inserted));
+        push({
+          board,
+          undo() {
+            if (copy) inserted.forEach((n) => n.remove());
+            else {
+              restore(context.places);
+              apply(context.before);
+            }
+            activate(context.source, true);
+            select(copy ? context.roots : inserted, true);
+          },
+          redo() {
+            inserted.forEach((n) => board.append(n));
+            apply(after);
+            activate(board, true);
+            select(inserted, true);
+          }
+        });
+        activate(board);
+        select(inserted, true);
+        toast(copy ? "已复制到此画布 · 可撤销" : "已移动到此画布 · 可撤销");
+        return true;
+      } catch (error) {
+        if (copy) for (const n of inserted) n.remove();
+        else restore(context.places);
+        apply(context.before);
+        activate(context.source);
+        select(context.roots, true);
+        toast(error.message, 4500);
+        return true;
+      }
+    }
+    function move(context, event) {
+      if (!enabled || !viewport.workspaceActive()) return;
+      const board = viewport.boardAt(event.clientX, event.clientY);
+      viewport.highlight(board && board !== context.source ? board : null);
+      const r = context.source?.getBoundingClientRect(), outside = r && (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom);
+      if (!outside) {
+        ghost?.remove();
+        ghost = null;
+        return;
+      }
+      if (!ghost) {
+        try {
+          const packet = capture(context.roots);
+          ghost = document.createElement("div");
+          ghost.className = "workspace-ghost";
+          for (const object of packet.objects)
+            for (const leaf of object.leaves) {
+              const clone = leaf.copy.cloneNode(true);
+              for (const n of [clone, ...clone.querySelectorAll("*")]) {
+                for (const a of [...n.attributes])
+                  if (/^on/i.test(a.name)) n.removeAttribute(a.name);
+                n.style.setProperty("pointer-events", "none", "important");
+              }
+              ghost.append(clone);
+            }
+          ui.append(ghost);
+          ghost._sources = packet.objects.flatMap(
+            (o) => o.leaves.map((l) => l.source)
+          );
+        } catch {
+          return;
+        }
+      }
+      [...ghost.children].forEach((node, i) => {
+        const g = elementGeometry(ghost._sources[i]);
+        Object.assign(node.style, {
+          position: "fixed",
+          margin: "0",
+          boxSizing: "border-box",
+          width: `${g.w}px`,
+          height: `${g.h}px`,
+          left: `${g.cx - g.w / 2}px`,
+          top: `${g.cy - g.h / 2}px`,
+          inset: "auto",
+          translate: "none",
+          rotate: "none",
+          scale: "none",
+          zoom: "1",
+          transformOrigin: "50% 50%",
+          transform: `rotate(${g.angle}deg) scale(${g.scale})`
+        });
+        node.style.left = `${g.cx - g.w / 2}px`;
+        node.style.top = `${g.cy - g.h / 2}px`;
+      });
+    }
+    function copyEvent(event) {
+      if (!enabled || !canEdit() || !S.selection.length || S.text) return false;
+      try {
+        const packet = capture(S.selection), token = crypto.getRandomValues(new Uint32Array(4)).join("-");
+        clipboard = { packet, token };
+        event.clipboardData.setData("application/x-dom-slides-objects", token);
+        event.clipboardData.setData(
+          "text/plain",
+          S.selection.map((n) => n.textContent).join("\n")
+        );
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        toast("已复制元素 · 可粘贴到其他画布");
+        return true;
+      } catch (error) {
+        toast(error.message, 4500);
+        return false;
+      }
+    }
+    function pasteEvent(event) {
+      if (!enabled || !canEdit() || S.text || !clipboard || event.clipboardData?.getData("application/x-dom-slides-objects") !== clipboard.token)
+        return false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const board = S.current;
+      if (!board) return true;
+      let inserted = [];
+      try {
+        const r = board.getBoundingClientRect();
+        inserted = install(clipboard.packet, board, {
+          copy: true,
+          center: { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+        });
+        const after = snap(all(inserted));
+        push({
+          board,
+          undo() {
+            inserted.forEach((n) => n.remove());
+            select(null);
+          },
+          redo() {
+            inserted.forEach((n) => board.append(n));
+            apply(after);
+            activate(board, true);
+            select(inserted, true);
+          }
+        });
+        select(inserted);
+        toast("已粘贴到当前画布 · 可撤销");
+      } catch (error) {
+        inserted.forEach((n) => n.remove());
+        toast(error.message, 4500);
+      }
+      return true;
+    }
+    return { enabled, begin, move, drop, clear, copyEvent, pasteEvent };
   }
 
   // html-design/src/crop-geometry.js
@@ -841,7 +1327,7 @@ property of their respective owners.
   }
 
   // html-design/src/editor.css
-  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-main:hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.thumb-main:focus-visible .frame {\n  outline: 2px solid var(--selection);\n  outline-offset: 3px;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.tbar .fs {\n  width: 52px;\n  height: 29px;\n  background: #383838;\n  border: 0;\n  border-radius: 5px;\n  padding: 0 4px;\n  text-align: center;\n  font-variant-numeric: tabular-nums;\n  appearance: textfield;\n}\n.fs::-webkit-inner-spin-button {\n  appearance: none;\n}\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; }\n.color-control:hover { background:var(--hover); }\n.color-control input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }\n.color-control .color-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap: 0; width: 36px; }\n.add-text .icon:first-child { width: 12px; height: 12px; }\n.add-text .icon:last-child { width: 17px; height: 17px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-scope { color:var(--muted); font-size:12px; padding:0 8px; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n';
+  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-main:hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.thumb-main:focus-visible .frame {\n  outline: 2px solid var(--selection);\n  outline-offset: 3px;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.tbar .fs {\n  width: 52px;\n  height: 29px;\n  background: #383838;\n  border: 0;\n  border-radius: 5px;\n  padding: 0 4px;\n  text-align: center;\n  font-variant-numeric: tabular-nums;\n  appearance: textfield;\n}\n.fs::-webkit-inner-spin-button {\n  appearance: none;\n}\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; }\n.color-control:hover { background:var(--hover); }\n.color-control input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }\n.color-control .color-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap: 0; width: 36px; }\n.add-text .icon:first-child { width: 12px; height: 12px; }\n.add-text .icon:last-child { width: 17px; height: 17px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-scope { color:var(--muted); font-size:12px; padding:0 8px; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n\n.workspace-switch{flex-shrink:0;margin-inline:auto;background:#e8e8e8}.workspace-switch button{font-size:12px;padding:4px 9px;min-width:0}.workspace-switch [aria-pressed=true]{background:#fff;color:#202020}.workspace-label{position:fixed;height:24px;min-height:24px;justify-content:flex-start;padding:0;background:transparent;font-size:11px;color:#646464;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:auto}.workspace-label:hover{background:transparent;color:#202020}.workspace-ghost{position:fixed;inset:0;pointer-events:none;z-index:2147483641}.workspace-ghost *{pointer-events:none!important}.workspace-labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}\n@media(max-width:760px){:host([data-workspace-enabled]) .page-title{display:none}:host([data-workspace-enabled]) .footer{gap:2px}:host([data-workspace-enabled]) .workspace-switch button{padding-inline:6px;font-size:11px}}\n';
 
   // node_modules/lucide/dist/esm/icons/arrow-down.mjs
   var ArrowDown = [
@@ -1592,7 +2078,7 @@ property of their respective owners.
   }
 
   // html-design/src/ui.js
-  function toolbarHTML({ HANDLES }) {
+  function toolbarHTML({ HANDLES, WORKSPACE = false }) {
     const keys = shortcutLabels(navigator.platform);
     const fmt = (cmd, name, label) => `<button type="button" data-fmt="${cmd}" title="${label}" aria-label="${label}" class="icon-only">${icon(name)}</button>`;
     return `<style>${editor_default}</style>
@@ -1610,6 +2096,7 @@ property of their respective owners.
   </header>
   <aside class="nav" aria-label="页面管理"><div class="nav-head"><strong>页面</strong>${button("page-add", "Plus", "新增页面", { cls: "icon-only" })}</div><div class="thumb-list" role="list" aria-label="页面缩略图"></div></aside>
   <footer class="footer"><div class="page-controls">${button("prev", "ChevronLeft", "上一页 (PageUp / ←)", { cls: "icon-only" })}<span class="pageno"></span>${button("next", "ChevronRight", "下一页 (PageDown / →)", { cls: "icon-only" })}<button class="page-title" data-act="page-rename" title="重命名当前页面"></button></div>
+    ${WORKSPACE ? '<div class="seg workspace-switch" role="group" aria-label="画布视图"><button type="button" data-act="view-single" aria-pressed="false">单页</button><button type="button" data-act="view-workspace" aria-pressed="true">工作区</button></div>' : ""}
     <div class="zoom">${button("zoom-out", "Minus", `缩小 (${keys["zoom-out"]})`, { cls: "icon-only" })}<button data-act="zoom-reset" class="zv" title="恢复 100% (${keys["zoom-reset"]})">100%</button>${button("zoom-in", "Plus", `放大 (${keys["zoom-in"]})`, { cls: "icon-only" })}${button("zoom-fit", "Scan", `适应窗口 (${keys["zoom-fit"]})`, { cls: "fit", text: "适应" })}</div></footer>
   <div class="tbar" role="toolbar" aria-label="元素工具" hidden>
     <span class="selection-count" role="status" aria-live="polite" hidden></span>
@@ -1640,6 +2127,7 @@ property of their respective owners.
   <div class="help-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title" hidden><div class="box help-box"><div class="mh"><h2 id="shortcut-help-title">快捷键与帮助</h2><span class="sp"></span>${button("help-close", "X", "关闭快捷键与帮助 (Esc)", { cls: "icon-only" })}</div><div class="help-content" tabindex="0" aria-label="快捷键说明">
     <p class="help-note">画布快捷键在编辑时生效；输入文字、裁切和弹层保留各自操作。${keys.mac ? "此处显示 Mac 键位，Ctrl 组合键也可使用。" : "此处显示 Ctrl 键位。"}</p>
     ${[["选择与组合", [["全选当前页 / 组合内", keys["select-all"]], ["组合", keys.group], ["取消组合", keys.ungroup], ["增减选择", `${keys.shift} / ${keys.mod} + 单击`], ["按方向扩选", keys.extend], ["进入组 / 改字 / 裁切", "Enter / 双击"], ["取消操作 / 返回上层", "Esc"]]], ["编辑与保存", [["撤销", keys.undo], ["重做", keys.redo], ["复制对象", keys["element-duplicate"]], ["删除对象", "Delete / Backspace"], ["微调 1px / 10px", `方向键 / ${keys.shift} + 方向键`], ["保存", keys.save], ["应用源码（源码内）", keys.source]]], ["视图与手势", [["放大 / 缩小", `${keys["zoom-in"]} / ${keys["zoom-out"]}`], ["100% / 适应窗口", `${keys["zoom-reset"]} / ${keys["zoom-fit"]}`], ["平移画布", "空格 + 拖动"], ["暂停吸附", keys.alt], ["旋转 15°步进", `${keys.shift} + 旋转`], ["编辑时切页", "PageUp / PageDown"]]]].map(([title, rows]) => `<section class="help-section"><h3>${title}</h3><dl>${rows.map(([label, key]) => `<div class="help-row"><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join("")}</dl></section>`).join("")}
+    ${WORKSPACE ? '<p class="help-note">工作区编辑：拖到其他画布移动；Alt/Option 拖动复制。Ctrl/⌘ C 复制选中元素，在目标画布 Ctrl/⌘ V 粘贴。移动和复制都可一步撤销。</p>' : ""}
     <p class="help-note">空白处拖动框选，${keys.shift} + 框选追加。裁切内的撤销 / 重做使用局部历史，Enter 完成、Esc 取消。图片和文字可在元素工具条进一步调整。</p>
   </div></div></div>
   ${reviewHTML()}
@@ -2137,6 +2625,98 @@ property of their respective owners.
     };
   }
 
+  // html-design/src/workspace-view.js
+  function createWorkspaceView({
+    S,
+    root,
+    stage,
+    ui,
+    withAll,
+    activate,
+    single
+  }) {
+    const enabled = stage.hasAttribute("data-workspace-prototype");
+    const labels = document.createElement("div");
+    labels.className = "workspace-labels";
+    labels.hidden = true;
+    ui.append(labels);
+    let entries = [], extent = { w: 1280, h: 720 };
+    const active = () => enabled && !!S.workspace && !S.playing;
+    function layout2() {
+      entries = withAll(
+        () => [...stage.querySelectorAll("[data-artboard]")].map((b) => ({
+          b,
+          w: b.offsetWidth || 1280,
+          h: b.offsetHeight || 720
+        }))
+      );
+      let y = 72, maximum = 0;
+      for (let row = 0; row < entries.length; row += 3) {
+        let x = 48, height = 0;
+        for (const item of entries.slice(row, row + 3)) {
+          item.x = x;
+          item.y = y;
+          x += item.w + 140;
+          height = Math.max(height, item.h);
+        }
+        maximum = Math.max(maximum, x - 92);
+        y += height + 140;
+      }
+      extent = { w: Math.max(1, maximum), h: Math.max(1, y - 68) };
+      return extent;
+    }
+    function css() {
+      return `html[data-editor-workspace] [data-artboard]{position:absolute!important;inset:auto!important;margin:0!important;flex:none!important}` + entries.map(
+        ({ b, x, y }) => `html[data-editor-workspace] [data-artboard=${CSS.escape(b.dataset.artboard)}]{left:${x}px!important;top:${y}px!important}`
+      ).join("");
+    }
+    function draw(bounds) {
+      labels.hidden = !active();
+      if (!active()) return;
+      labels.replaceChildren();
+      for (const item of entries) {
+        const r = item.b.getBoundingClientRect();
+        if (r.right < bounds.x || r.left > bounds.x + bounds.w || r.bottom < bounds.y || r.top > bounds.y + bounds.h)
+          continue;
+        const button2 = document.createElement("button");
+        button2.className = "workspace-label";
+        button2.textContent = item.b.dataset.title || item.b.dataset.artboard;
+        button2.title = `${button2.textContent} · ${item.w} × ${item.h} · 双击进入单页`;
+        Object.assign(button2.style, {
+          left: `${Math.max(bounds.x + 4, r.left)}px`,
+          top: `${Math.max(bounds.y + 2, r.top - 28)}px`,
+          maxWidth: `${Math.max(40, r.width)}px`
+        });
+        button2.onclick = () => activate(item.b);
+        button2.ondblclick = () => {
+          activate(item.b);
+          single();
+        };
+        labels.append(button2);
+      }
+    }
+    function boardAt(x, y) {
+      return entries.map((i) => i.b).find((b) => {
+        const r = b.getBoundingClientRect();
+        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+      }) || null;
+    }
+    function highlight(board) {
+      for (const item of entries)
+        item.b.toggleAttribute("data-editor-drop-target", item.b === board);
+    }
+    return {
+      enabled,
+      active,
+      layout: layout2,
+      css,
+      draw,
+      boardAt,
+      highlight,
+      extent: () => extent
+    };
+  }
+
   // html-design/src/viewport.js
   var STEPS = [
     0.1,
@@ -2168,9 +2748,16 @@ property of their respective owners.
     currentPage,
     flush,
     save,
-    toast
+    toast,
+    withAll
   }) {
     let pan = { x: 0, y: 0 }, space = false, panning, restore, playTimer;
+    const workspace = createWorkspaceView({ S, root, stage, ui, withAll, activate(b) {
+      finishEditing("pan");
+      currentPage(b);
+    }, single: () => view(false) });
+    host.toggleAttribute("data-workspace-enabled", workspace.enabled);
+    const workspaceActive = () => workspace.active();
     const clamp2 = (z) => Math.max(0.1, Math.min(4, Math.round(z * 1e3) / 1e3));
     function bounds() {
       if (S.playing) return { x: 0, y: 0, w: innerWidth, h: innerHeight };
@@ -2178,21 +2765,27 @@ property of their respective owners.
       return { x: nav, y: 52, w: innerWidth - nav, h: innerHeight - 92 };
     }
     function size() {
+      if (workspace.active()) return workspace.layout();
       return {
         w: S.current?.offsetWidth || 1280,
         h: S.current?.offsetHeight || 720
       };
     }
     function drawViewport() {
+      if (workspace.enabled && !S.playing) root.toggleAttribute("data-editor-single", !workspace.active());
       if (S.playing && S.playMode === "scroll") {
         const z2 = S.zoom, b2 = size();
         style2.textContent = `@media screen{html[data-editor-scrolling] [data-stage]{position:fixed!important;inset:0!important;display:flex!important;flex-direction:column!important;align-items:center!important;width:100%!important;height:100vh!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:max(32px,calc((100vh - ${b2.h * z2}px)/2)) 24px!important;gap:40px!important;box-sizing:border-box!important;transform:none!important;overflow:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable both-edges}html[data-editor-scrolling] [data-artboard]{display:block!important;flex-shrink:0!important;margin:0!important;zoom:${z2}!important;box-shadow:none!important}}`;
+        workspace.draw(bounds());
         draw();
         return;
       }
       const v = bounds(), b = size(), z = S.zoom;
       const x = v.x + (v.w - b.w * z) / 2 + pan.x, y = v.y + (v.h - b.h * z) / 2 + pan.y;
       style2.textContent = `@media screen{html[data-editor-on] [data-stage]{position:fixed!important;inset:auto!important;left:${x}px!important;top:${y}px!important;display:block!important;width:${b.w}px!important;height:${b.h}px!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;gap:0!important;transform-origin:0 0!important;transform:scale(${z})!important;overflow:visible!important}html[data-editor-on] [data-artboard]{margin:0!important;box-shadow:none!important}}`;
+      if (workspace.active()) style2.textContent += `@media screen{${workspace.css()}html[data-editor-workspace] [data-editor-drop-target]{outline:${2 / S.zoom}px solid #258bff!important;outline-offset:${4 / S.zoom}px}html[data-editor-workspace] [data-editor-drag-source]{visibility:hidden!important}}`;
+      workspace.draw(v);
+      ui.querySelectorAll(".workspace-switch [data-act]").forEach((n) => n.setAttribute("aria-pressed", String(n.dataset.act === "view-workspace" === !!S.workspace)));
       ui.querySelector("[data-act=zoom-fit]").setAttribute("aria-pressed", S.fit);
       ui.querySelector(".zv").textContent = `${Math.round(z * 100)}%`;
       draw();
@@ -2236,6 +2829,27 @@ property of their respective owners.
       S.fit = false;
       const z = dir > 0 ? STEPS.find((v) => v > S.zoom + 1e-3) : [...STEPS].reverse().find((v) => v < S.zoom - 1e-3);
       zoom(z ?? S.zoom);
+    }
+    function focusCurrent() {
+      if (!workspace.active() || !S.current) return refresh(true);
+      const v = bounds(), r = S.current.getBoundingClientRect();
+      pan.x += v.x + v.w / 2 - (r.left + r.width / 2);
+      pan.y += v.y + v.h / 2 - (r.top + r.height / 2);
+      S.fit = false;
+      drawViewport();
+    }
+    function view(on) {
+      if (!workspace.enabled || S.playing) return;
+      if (S.drag) {
+        S.drag.cancel?.();
+        S.drag = null;
+      }
+      finishEditing("pan");
+      S.workspace = on;
+      root.toggleAttribute("data-editor-workspace", on);
+      root.toggleAttribute("data-editor-single", !on);
+      pan = { x: 0, y: 0 };
+      fit();
     }
     function refresh(center = false) {
       if (S.fit) fit();
@@ -2454,7 +3068,8 @@ property of their respective owners.
             x: e.clientX,
             y: e.clientY
           });
-        } else if (!S.fit) {
+        } else if (!S.fit || workspace.active()) {
+          S.fit = false;
           pan.x -= e.deltaX;
           pan.y -= e.deltaY;
           drawViewport();
@@ -2462,38 +3077,7 @@ property of their respective owners.
       },
       { passive: false, capture: true }
     );
-    return { zoom, fit, step, refresh, bounds, preview, stop };
-  }
-
-  // html-design/src/identifiers.js
-  function rekeyDOMIds(tree, prefix) {
-    const all = [tree, ...tree.querySelectorAll("*")], ids = /* @__PURE__ */ new Map();
-    for (const node of all)
-      if (node.id) {
-        const old = node.id;
-        node.id = `${prefix}-${old}`;
-        ids.set(old, node.id);
-      }
-    const ordered = [...ids].sort((a, b) => b[0].length - a[0].length);
-    for (const node of all) {
-      for (const attr of [...node.attributes]) {
-        if (["id", "src", "srcset"].includes(attr.name)) continue;
-        let value = attr.value;
-        if (["for", "aria-labelledby", "aria-describedby"].includes(attr.name))
-          value = value.split(" ").map((id) => ids.get(id) || id).join(" ");
-        for (const [before, after] of ordered) {
-          value = value.replaceAll(`url(#${before})`, `url(#${after})`).replaceAll(`url("#${before}")`, `url("#${after}")`).replaceAll(`url('#${before}')`, `url('#${after}')`);
-          if (value === `#${before}`) value = `#${after}`;
-        }
-        if (value !== attr.value) node.setAttribute(attr.name, value);
-      }
-      if (node.matches("style")) {
-        let css = node.textContent;
-        for (const [before, after] of ordered)
-          css = css.replaceAll(`#${before}`, `#${after}`);
-        node.textContent = css;
-      }
-    }
+    return { zoom, fit, step, refresh, bounds, preview, stop, workspaceActive, view, focusCurrent, boardAt: workspace.boardAt, highlight: workspace.highlight };
   }
 
   // html-design/src/pages.js
@@ -7367,93 +7951,13 @@ property of their respective owners.
     };
   }
 
-  // html-design/src/selection.js
-  function selectionRoots(nodes) {
-    const unique = [...new Set(nodes)].filter((n) => n?.isConnected);
-    return unique.filter(
-      (n) => !unique.some((other) => other !== n && other.contains(n))
-    );
-  }
-  function unionRect(nodes) {
-    const rects = nodes.map(objectRect);
-    const left = Math.min(...rects.map((r) => r.left)), top = Math.min(...rects.map((r) => r.top));
-    const right = Math.max(...rects.map((r) => r.right)), bottom = Math.max(...rects.map((r) => r.bottom));
-    return {
-      left,
-      top,
-      right,
-      bottom,
-      width: right - left,
-      height: bottom - top
-    };
-  }
-  function selectable(board, context = null) {
-    return [...new Set([...(context || board).querySelectorAll("[data-el]")].map((n) => logicalTarget(n, context)))].filter((n) => {
-      if (!n) return false;
-      const r = objectRect(n), s = getComputedStyle(n);
-      return n.closest("[data-artboard]") === board && r.width > 0 && r.height > 0 && s.visibility === "visible" && s.opacity !== "0";
-    });
-  }
-  function directionTarget(nodes, board, key, context = null) {
-    const selected = selectionRoots(nodes);
-    if (!selected.length) return null;
-    const from = objectRect(selected.at(-1));
-    const x = from.left + from.width / 2, y = from.top + from.height / 2;
-    const horizontal = ["ArrowLeft", "ArrowRight"].includes(key), sign = ["ArrowLeft", "ArrowUp"].includes(key) ? -1 : 1;
-    let best = null;
-    for (const node of selectable(board, context)) {
-      if (selected.some((n) => n === node || n.contains(node) || node.contains(n)))
-        continue;
-      const r = objectRect(node), dx = r.left + r.width / 2 - x, dy = r.top + r.height / 2 - y;
-      const forward = (horizontal ? dx : dy) * sign, cross = Math.abs(horizontal ? dy : dx);
-      if (forward <= 1) continue;
-      const score = forward + cross * 2;
-      if (!best || score < best.score) best = { node, score };
-    }
-    return best?.node || null;
-  }
-  function createSelectionOverlay(ui) {
-    const members = document.createElement("div"), marquee = document.createElement("div");
-    members.className = "selection-members";
-    marquee.className = "marquee";
-    marquee.hidden = true;
-    ui.append(members, marquee);
-    return {
-      draw(nodes) {
-        members.replaceChildren();
-        if (nodes.length < 2) return;
-        for (const node of nodes) {
-          const r = objectRect(node), frame = document.createElement("div");
-          frame.className = "selection-member";
-          Object.assign(frame.style, {
-            left: r.left + "px",
-            top: r.top + "px",
-            width: r.width + "px",
-            height: r.height + "px"
-          });
-          members.append(frame);
-        }
-      },
-      marquee(rect) {
-        marquee.hidden = !rect;
-        if (rect)
-          Object.assign(marquee.style, {
-            left: rect.left + "px",
-            top: rect.top + "px",
-            width: rect.width + "px",
-            height: rect.height + "px"
-          });
-      }
-    };
-  }
-
   // html-design/src/editor.js
   (() => {
     if (window.__htmlDesignEditor) return;
     window.__htmlDesignEditor = true;
     const MEDIA = "img,video,canvas,svg,iframe,picture,[data-crop-frame]";
     const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
-    const SKIP_ATTR = /^(contenteditable|data-editor-current)$/;
+    const SKIP_ATTR = /^(contenteditable|data-editor-current|data-editor-drop-target|data-editor-drag-source)$/;
     function main() {
       const root = document.documentElement;
       const stage = document.querySelector("[data-stage]") || document.body;
@@ -7473,6 +7977,7 @@ property of their respective owners.
         undo: [],
         redo: [],
         changed: false,
+        workspace: false,
         zoom: 1,
         fit: true,
         replace: null
@@ -7515,7 +8020,7 @@ property of their respective owners.
         if (!host.isConnected) root.append(host);
       }).observe(root, { childList: true });
       const ui = host.attachShadow({ mode: "open" });
-      ui.innerHTML = toolbarHTML({ HANDLES });
+      ui.innerHTML = toolbarHTML({ HANDLES, WORKSPACE: stage.hasAttribute("data-workspace-prototype") });
       const $ = (s) => ui.querySelector(s);
       const side = $(".nav"), head = $(".head"), selBox = $(".sel"), tbar = $(".tbar");
       const helpDialog = $(".help-dialog");
@@ -7680,6 +8185,7 @@ property of their respective owners.
         host,
         ui,
         style: zoomStyle,
+        withAll,
         draw: drawSel,
         pageStep,
         finishEditing(resume) {
@@ -7695,6 +8201,25 @@ property of their respective owners.
         flush: () => persistence?.flush() || Promise.resolve(),
         save: () => save(),
         toast
+      });
+      const transfer = createWorkspaceTransfer({
+        S,
+        stage,
+        ui,
+        viewport,
+        snap,
+        apply,
+        push,
+        select,
+        elementId,
+        canEdit: () => S.editing && !S.playing && !!persistence?.canEdit(),
+        toast,
+        activate(b, focus = false) {
+          setCurrent(b);
+          markActive();
+          syncBar();
+          if (focus) viewport.workspaceActive() ? viewport.focusCurrent() : viewport.refresh(true);
+        }
       });
       const applyZoom = (z, at = null) => viewport.zoom(z, at);
       const zoomStep = (dir) => viewport.step(dir);
@@ -8106,9 +8631,10 @@ property of their respective owners.
         const b = el.closest("[data-artboard]"), s = scaleOf(b), nodes = groupRoots(S.selection), positions = nodes.map((node) => ({ node, p: getPos(node), g: elementGeometry(node) })), before = snap(nodes);
         if (!transformable(S.selection) || positions.some((item) => !item.g.supported)) return toast("这种变换暂不支持拖动、缩放或旋转");
         let alignment = guides.begin(nodes, b, S.group);
-        const x0 = e.clientX, y0 = e.clientY;
-        let moved = false;
+        const x0 = e.clientX, y0 = e.clientY, boardStart = b.getBoundingClientRect(), cross = transfer.enabled ? transfer.begin(S.selection) : null;
+        let moved = false, lastEvent = e;
         S.drag = {
+          kind: "element",
           move(ev) {
             if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3)
               return;
@@ -8121,12 +8647,15 @@ property of their respective owners.
               alignment = guides.begin(nodes, b, S.group);
             }
             moved = true;
+            lastEvent = ev;
+            const currentBoard = b.getBoundingClientRect(), currentScale = scaleOf(b), workspace = viewport.workspaceActive();
+            const outside = workspace && (ev.clientX < currentBoard.left || ev.clientX > currentBoard.right || ev.clientY < currentBoard.top || ev.clientY > currentBoard.bottom);
             const delta = alignment.move(
               {
-                x: (ev.clientX - x0) / s,
-                y: (ev.clientY - y0) / s
+                x: workspace ? (ev.clientX - currentBoard.left) / currentScale - (x0 - boardStart.left) / s : (ev.clientX - x0) / s,
+                y: workspace ? (ev.clientY - currentBoard.top) / currentScale - (y0 - boardStart.top) / s : (ev.clientY - y0) / s
               },
-              ev.altKey
+              ev.altKey || outside
             );
             positions.forEach(({ node, p, g }) => {
               const d = inverseDelta(g.parent, delta.x * s, delta.y * s);
@@ -8134,12 +8663,16 @@ property of their respective owners.
             });
             drawSel();
             alignment.draw(delta.matches);
+            if (cross) transfer.move(cross, ev);
           },
-          up() {
+          up(event) {
             guides.clear();
+            if (moved && cross && transfer.drop(cross, event || lastEvent)) return;
+            transfer.clear();
             if (moved) commit(before, b);
           },
           cancel() {
+            transfer.clear();
             guides.clear();
             apply(before);
             drawSel();
@@ -8926,6 +9459,15 @@ property of their respective owners.
           if (fromUI(e)) return;
           closeMenus();
           host.removeAttribute("data-mobile-nav");
+          const clickedBoard = e.target.closest?.("[data-artboard]");
+          if (viewport.workspaceActive() && clickedBoard && clickedBoard !== S.current) {
+            crop.finish();
+            endText();
+            select(null);
+            setCurrent(clickedBoard);
+            markActive();
+            syncBar();
+          }
           if (!S.editing) return;
           if (!inStage(e.target)) {
             endText();
@@ -9009,6 +9551,12 @@ property of their respective owners.
           true
         )
       );
+      addEventListener("copy", (e) => {
+        if (!fromUI(e) && !crop.active) transfer.copyEvent(e);
+      }, true);
+      addEventListener("paste", (e) => {
+        if (!fromUI(e) && !crop.active) transfer.pasteEvent(e);
+      }, true);
       addEventListener(
         "paste",
         (e) => {
@@ -9166,6 +9714,8 @@ property of their respective owners.
           btn.setAttribute("aria-pressed", on);
           viewport.refresh(true);
         },
+        "view-single": () => viewport.view(false),
+        "view-workspace": () => viewport.view(true),
         prev: () => pageStep(-1),
         next: () => pageStep(1),
         edit: () => {
@@ -9410,6 +9960,8 @@ property of their respective owners.
         ns.querySelectorAll("[data-editor-current],[contenteditable]").forEach(
           (n) => {
             n.removeAttribute("data-editor-current");
+            n.removeAttribute("data-editor-drop-target");
+            n.removeAttribute("data-editor-drag-source");
             n.removeAttribute("contenteditable");
           }
         );
@@ -9480,7 +10032,7 @@ property of their respective owners.
           );
         pages.clearTarget();
         host.removeAttribute("data-mobile-nav");
-        viewport.refresh(true);
+        viewport.workspaceActive() ? viewport.focusCurrent() : viewport.refresh(true);
         markActive();
         syncBar();
       }
@@ -9618,9 +10170,11 @@ property of their respective owners.
           "[data-editor-ui], [data-editor-connection], style[data-editor-style], #codex-browser-sidebar-comments-root"
         ).forEach((n) => n.remove());
         [...doc.attributes].filter((a) => /^data-edit/.test(a.name)).forEach((a) => doc.removeAttribute(a.name));
-        doc.querySelectorAll("[contenteditable],[data-editor-current]").forEach((n) => {
+        doc.querySelectorAll("[contenteditable],[data-editor-current],[data-editor-drop-target],[data-editor-drag-source]").forEach((n) => {
           n.removeAttribute("contenteditable");
           n.removeAttribute("data-editor-current");
+          n.removeAttribute("data-editor-drop-target");
+          n.removeAttribute("data-editor-drag-source");
         });
         return "<!DOCTYPE html>\n" + doc.outerHTML;
       }
@@ -9774,7 +10328,7 @@ property of their respective owners.
       buildNav();
       markActive();
       setEditing(false);
-      zoomFit();
+      stage.hasAttribute("data-workspace-prototype") ? viewport.view(true) : zoomFit();
       document.readyState === "complete" ? viewport.refresh() : addEventListener("load", () => {
         buildNav();
         viewport.refresh();

@@ -1,3 +1,4 @@
+import { createWorkspaceTransfer } from "./workspace-transfer.js";
 import { selectionFrame, frameCorner, resizeCursor, sameSelection, rotationGroups, groupLocalAngle, writeGroupAngle } from './oriented-selection.js';
 import { isGroup, groupRoots, objectRect, logicalTarget, groupProblem, groupStructureProblem, stableGroupMarkup, layoutProbe } from "./groups.js";
 import { createCrop, cropImage } from './crop.js';
@@ -27,7 +28,7 @@ import {
 
   const MEDIA = 'img,video,canvas,svg,iframe,picture,[data-crop-frame]';
   const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
-  const SKIP_ATTR = /^(contenteditable|data-editor-current)$/; // 编辑器临时属性：不进撤销、不触发缩略图刷新
+  const SKIP_ATTR = /^(contenteditable|data-editor-current|data-editor-drop-target|data-editor-drag-source)$/; // 编辑器临时属性：不进撤销、不触发缩略图刷新
 
   function main() {
     const root = document.documentElement;
@@ -48,6 +49,7 @@ import {
       undo: [],
       redo: [],
       changed: false,
+      workspace: false,
       zoom: 1,
       fit: true,
       replace: null,
@@ -99,7 +101,7 @@ import {
     }).observe(root, { childList: true });
 
     const ui = host.attachShadow({ mode: "open" });
-    ui.innerHTML = toolbarHTML({ HANDLES });
+    ui.innerHTML = toolbarHTML({ HANDLES, WORKSPACE:stage.hasAttribute("data-workspace-prototype") });
     const $ = (s) => ui.querySelector(s);
     const side = $(".nav"),
       head = $(".head"),
@@ -283,6 +285,7 @@ import {
       host,
       ui,
       style: zoomStyle,
+      withAll,
       draw: drawSel,
       pageStep,
       finishEditing(resume) {
@@ -298,6 +301,9 @@ import {
       flush: () => persistence?.flush() || Promise.resolve(),
       save: () => save(),
       toast,
+    });
+    const transfer = createWorkspaceTransfer({ S, stage, ui, viewport, snap, apply, push, select, elementId, canEdit:()=>S.editing&&!S.playing&&!!persistence?.canEdit(),toast,
+      activate(b,focus=false){setCurrent(b);markActive();syncBar();if(focus)viewport.workspaceActive()?viewport.focusCurrent():viewport.refresh(true);}
     });
     const applyZoom = (z, at = null) => viewport.zoom(z, at);
     const zoomStep = (dir) => viewport.step(dir);
@@ -714,9 +720,10 @@ import {
       if (!transformable(S.selection) || positions.some(item => !item.g.supported)) return toast('这种变换暂不支持拖动、缩放或旋转');
       let alignment = guides.begin(nodes, b, S.group);
       const x0 = e.clientX,
-        y0 = e.clientY;
-      let moved = false;
+        y0 = e.clientY, boardStart = b.getBoundingClientRect(), cross = transfer.enabled ? transfer.begin(S.selection) : null;
+      let moved = false, lastEvent = e;
       S.drag = {
+        kind: 'element',
         move(ev) {
           if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3)
             return;
@@ -728,12 +735,13 @@ import {
             alignment = guides.begin(nodes, b, S.group);
           }
           moved = true;
+          lastEvent=ev;
+          const currentBoard=b.getBoundingClientRect(), currentScale=scaleOf(b), workspace=viewport.workspaceActive();
+          const outside=workspace && (ev.clientX<currentBoard.left||ev.clientX>currentBoard.right||ev.clientY<currentBoard.top||ev.clientY>currentBoard.bottom);
           const delta = alignment.move(
-            {
-              x: (ev.clientX - x0) / s,
-              y: (ev.clientY - y0) / s,
-            },
-            ev.altKey,
+            {x:workspace?(ev.clientX-currentBoard.left)/currentScale-(x0-boardStart.left)/s:(ev.clientX-x0)/s,
+             y:workspace?(ev.clientY-currentBoard.top)/currentScale-(y0-boardStart.top)/s:(ev.clientY-y0)/s},
+            ev.altKey || outside,
           );
           positions.forEach(({ node, p, g }) => {
             const d = inverseDelta(g.parent, delta.x * s, delta.y * s);
@@ -741,12 +749,16 @@ import {
           });
           drawSel();
           alignment.draw(delta.matches);
+          if(cross)transfer.move(cross,ev);
         },
-        up() {
+        up(event) {
           guides.clear();
+          if(moved&&cross&&transfer.drop(cross,event||lastEvent))return;
+          transfer.clear();
           if (moved) commit(before, b);
         },
         cancel() {
+          transfer.clear();
           guides.clear();
           apply(before);
           drawSel();
@@ -1512,6 +1524,10 @@ import {
         if (fromUI(e)) return;
         closeMenus();
         host.removeAttribute("data-mobile-nav");
+        const clickedBoard = e.target.closest?.('[data-artboard]');
+        if (viewport.workspaceActive() && clickedBoard && clickedBoard!==S.current) {
+          crop.finish(); endText(); select(null); setCurrent(clickedBoard); markActive(); syncBar();
+        }
         if (!S.editing) return;
         if (!inStage(e.target)) {
           endText();
@@ -1598,6 +1614,8 @@ import {
       ),
     );
 
+    addEventListener('copy',e=>{if(!fromUI(e)&&!crop.active)transfer.copyEvent(e);},true);
+    addEventListener('paste',e=>{if(!fromUI(e)&&!crop.active)transfer.pasteEvent(e);},true);
     addEventListener(
       "paste",
       (e) => {
@@ -1758,6 +1776,8 @@ import {
         btn.setAttribute("aria-pressed", on);
         viewport.refresh(true);
       },
+      "view-single": () => viewport.view(false),
+      "view-workspace": () => viewport.view(true),
       prev: () => pageStep(-1),
       next: () => pageStep(1),
       edit: () => {
@@ -2007,6 +2027,8 @@ import {
       ns.querySelectorAll("[data-editor-current],[contenteditable]").forEach(
         (n) => {
           n.removeAttribute("data-editor-current");
+          n.removeAttribute("data-editor-drop-target");
+          n.removeAttribute("data-editor-drag-source");
           n.removeAttribute("contenteditable");
         },
       );
@@ -2079,7 +2101,7 @@ import {
         );
       pages.clearTarget();
       host.removeAttribute("data-mobile-nav");
-      viewport.refresh(true);
+      viewport.workspaceActive() ? viewport.focusCurrent() : viewport.refresh(true);
       markActive();
       syncBar();
     }
@@ -2235,10 +2257,12 @@ import {
         .filter((a) => /^data-edit/.test(a.name))
         .forEach((a) => doc.removeAttribute(a.name));
       doc
-        .querySelectorAll("[contenteditable],[data-editor-current]")
+        .querySelectorAll("[contenteditable],[data-editor-current],[data-editor-drop-target],[data-editor-drag-source]")
         .forEach((n) => {
           n.removeAttribute("contenteditable");
           n.removeAttribute("data-editor-current");
+          n.removeAttribute("data-editor-drop-target");
+          n.removeAttribute("data-editor-drag-source");
         });
       return "<!DOCTYPE html>\n" + doc.outerHTML;
     }
@@ -2380,7 +2404,7 @@ import {
     buildNav();
     markActive();
     setEditing(false);
-    zoomFit();
+    stage.hasAttribute("data-workspace-prototype") ? viewport.view(true) : zoomFit();
     document.readyState === "complete"
       ? viewport.refresh()
       : addEventListener("load", () => {

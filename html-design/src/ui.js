@@ -2,7 +2,7 @@ import { shortcutLabels } from "./shortcuts.js";
 import styles from "./editor.css";
 import { icon, button as b } from "./icons.js";
 import { reviewHTML } from './review.js';
-export function toolbarHTML({ HANDLES }) {
+export function toolbarHTML({ HANDLES, WORKSPACE = false }) {
   const keys = shortcutLabels(navigator.platform);
   const fmt = (cmd, name, label) =>
     `<button type="button" data-fmt="${cmd}" title="${label}" aria-label="${label}" class="icon-only">${icon(name)}</button>`;
@@ -21,6 +21,7 @@ export function toolbarHTML({ HANDLES }) {
   </header>
   <aside class="nav" aria-label="页面管理"><div class="nav-head"><strong>页面</strong>${b("page-add", "Plus", "新增页面", { cls: "icon-only" })}</div><div class="thumb-list" role="list" aria-label="页面缩略图"></div></aside>
   <footer class="footer"><div class="page-controls">${b("prev", "ChevronLeft", "上一页 (PageUp / ←)", { cls: "icon-only" })}<span class="pageno"></span>${b("next", "ChevronRight", "下一页 (PageDown / →)", { cls: "icon-only" })}<button class="page-title" data-act="page-rename" title="重命名当前页面"></button></div>
+    ${WORKSPACE ? '<div class="seg workspace-switch" role="group" aria-label="画布视图"><button type="button" data-act="view-single" aria-pressed="false">单页</button><button type="button" data-act="view-workspace" aria-pressed="true">工作区</button></div>' : ''}
     <div class="zoom">${b("zoom-out", "Minus", `缩小 (${keys['zoom-out']})`, { cls: "icon-only" })}<button data-act="zoom-reset" class="zv" title="恢复 100% (${keys['zoom-reset']})">100%</button>${b("zoom-in", "Plus", `放大 (${keys['zoom-in']})`, { cls: "icon-only" })}${b("zoom-fit", "Scan", `适应窗口 (${keys['zoom-fit']})`, { cls: "fit", text: "适应" })}</div></footer>
   <div class="tbar" role="toolbar" aria-label="元素工具" hidden>
     <span class="selection-count" role="status" aria-live="polite" hidden></span>
@@ -51,6 +52,7 @@ export function toolbarHTML({ HANDLES }) {
   <div class="help-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title" hidden><div class="box help-box"><div class="mh"><h2 id="shortcut-help-title">快捷键与帮助</h2><span class="sp"></span>${b("help-close", "X", "关闭快捷键与帮助 (Esc)", { cls: "icon-only" })}</div><div class="help-content" tabindex="0" aria-label="快捷键说明">
     <p class="help-note">画布快捷键在编辑时生效；输入文字、裁切和弹层保留各自操作。${keys.mac ? '此处显示 Mac 键位，Ctrl 组合键也可使用。' : '此处显示 Ctrl 键位。'}</p>
     ${[['选择与组合', [['全选当前页 / 组合内',keys['select-all']],['组合',keys.group],['取消组合',keys.ungroup],['增减选择',`${keys.shift} / ${keys.mod} + 单击`],['按方向扩选',keys.extend],['进入组 / 改字 / 裁切','Enter / 双击'],['取消操作 / 返回上层','Esc']]],['编辑与保存',[['撤销',keys.undo],['重做',keys.redo],['复制对象',keys['element-duplicate']],['删除对象','Delete / Backspace'],['微调 1px / 10px',`方向键 / ${keys.shift} + 方向键`],['保存',keys.save],['应用源码（源码内）',keys.source]]],['视图与手势',[['放大 / 缩小',`${keys['zoom-in']} / ${keys['zoom-out']}`],['100% / 适应窗口',`${keys['zoom-reset']} / ${keys['zoom-fit']}`],['平移画布','空格 + 拖动'],['暂停吸附',keys.alt],['旋转 15°步进',`${keys.shift} + 旋转`],['编辑时切页','PageUp / PageDown']]]].map(([title,rows])=>`<section class="help-section"><h3>${title}</h3><dl>${rows.map(([label,key])=>`<div class="help-row"><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join('')}</dl></section>`).join('')}
+    ${WORKSPACE ? '<p class="help-note">工作区编辑：拖到其他画布移动；Alt/Option 拖动复制。Ctrl/⌘ C 复制选中元素，在目标画布 Ctrl/⌘ V 粘贴。移动和复制都可一步撤销。</p>' : ''}
     <p class="help-note">空白处拖动框选，${keys.shift} + 框选追加。裁切内的撤销 / 重做使用局部历史，Enter 完成、Esc 取消。图片和文字可在元素工具条进一步调整。</p>
   </div></div></div>
   ${reviewHTML()}
