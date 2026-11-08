@@ -157,6 +157,7 @@
     for (const b of t.boards)
       if (getComputedStyle(b).display === "none")
         b.style.setProperty("display", "block", "important");
+    document.body.getBoundingClientRect();
     let timeout;
     try {
       await Promise.race([
@@ -171,6 +172,8 @@
     } finally {
       clearTimeout(timeout);
     }
+    t.fontErrors = [...document.fonts].filter((font) => font.status === "error").map((font) => value(font.family));
+    t.failedImages = /* @__PURE__ */ new Set();
     for (const img of document.querySelectorAll("[data-artboard] img")) {
       img.loading = "eager";
       let timer;
@@ -185,6 +188,7 @@
           })
         ]);
       } catch {
+        t.failedImages.add(img);
       } finally {
         clearTimeout(timer);
       }
@@ -280,7 +284,7 @@
           source: /^(data|blob):/.test(image.currentSrc || image.src) ? "[embedded]" : value(image.currentSrc || image.src),
           naturalWidth: image.naturalWidth,
           naturalHeight: image.naturalHeight,
-          decoded: image.complete && image.naturalWidth > 0
+          decoded: image.complete && image.naturalWidth > 0 && !t.failedImages.has(image)
         }
       } : {}
     };
@@ -350,7 +354,7 @@
     }
     return {
       schemaVersion: 1,
-      status: images.some((n) => !n.naturalWidth) || truncated || objects.some((n) => n.identity === "invalid") || pages.some((n) => !n.pageId) ? "issues" : "ok",
+      status: t.fontErrors.length || t.failedImages.size || images.some((n) => !n.naturalWidth) || truncated || objects.some((n) => n.identity === "invalid") || pages.some((n) => !n.pageId) ? "issues" : "ok",
       units: "css-px",
       coordinateSpace: "artboard",
       environment: {
@@ -364,12 +368,18 @@
       coverage: { seen, returned: objects.length, truncated },
       resources: {
         imagesSeen: images.length,
-        imagesFailed: images.filter((n) => !n.naturalWidth).length
+        imagesFailed: t.failedImages.size,
+        fontsFailed: t.fontErrors.length,
+        failedFontFamilies: t.fontErrors.slice(0, 16)
       }
     };
   }
   async function patch(operations) {
     const t = await prepare(), changes = [], before = new Map(t.nodes.slice(0, 500).map((n) => [n, fingerprint(n)]));
+    if (t.fontErrors.length || t.failedImages.size)
+      throw new Error(
+        "Required font or image decoding failed; work copy is unchanged."
+      );
     for (const op of operations) {
       if (op.op === "setToken") {
         const sheets = [...document.querySelectorAll("style[data-design]")];
@@ -379,7 +389,9 @@
         sheet.replaceSync(sheets[0].textContent);
         if (sheet.cssRules.length !== 1 || sheet.cssRules[0].selectorText !== ":root")
           throw new Error("Token editing requires a single :root design rule.");
-        const rule = sheet.cssRules[0], old = rule.style.getPropertyValue(op.name);
+        if (!CSS.supports(op.name, op.value))
+          throw new Error("Invalid design-token CSS value.");
+        const rule = sheet.cssRules[0], old = rule.style.getPropertyValue(op.name), beforeDeclarations = rule.style.cssText;
         if (old === op.value) {
           changes.push({ op: op.op, status: "no-op" });
           continue;
@@ -389,6 +401,10 @@
           op.value,
           rule.style.getPropertyPriority(op.name)
         );
+        if (rule.style.cssText === beforeDeclarations) {
+          changes.push({ op: op.op, status: "no-op" });
+          continue;
+        }
         const text = sheet.cssRules[0].cssText;
         sheets[0].textContent = text;
         changes.push({ op: op.op, status: "applied", designText: text });
@@ -463,6 +479,12 @@
         });
       }
     }
+    document.body.getBoundingClientRect();
+    await document.fonts.ready;
+    if ([...document.fonts].some((font) => font.status === "error"))
+      throw new Error(
+        "Required font decoding failed after mutation; work copy is unchanged."
+      );
     for (let i = 0; i < changes.length; i++) {
       const change = changes[i], op = operations[i];
       if (op.op === "setToken")

@@ -184,3 +184,28 @@ test("size panel stays usable at desktop/narrow sizes and managed resize persist
     await rm(root, { recursive: true, force: true });
   }
 });
+test("review: copied page retains important inline width and height against stylesheet constraints", async () => {
+  const p = await open();
+  try {
+    await p.addStyleTag({
+      content: "[data-artboard]{width:600px!important;height:400px!important}",
+    });
+    await p.locator("[data-artboard=p1]").evaluate((n) => {
+      n.style.setProperty("width", "800px", "important");
+      n.style.setProperty("height", "450px", "important");
+    });
+    await p.locator(".thumb-more").first().click();
+    await p.locator("[data-act=page-copy]").click();
+    assert.deepEqual((await size(p, "p4")).slice(0, 2), [800, 450]);
+    assert.deepEqual(
+      await p
+        .locator("[data-artboard=p4]")
+        .evaluate((n) =>
+          ["width", "height"].map((k) => n.style.getPropertyPriority(k)),
+        ),
+      ["important", "important"],
+    );
+  } finally {
+    await p.close();
+  }
+});

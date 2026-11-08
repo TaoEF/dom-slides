@@ -293,8 +293,8 @@ export function createPages({
     // ID/nth-child-dependent CSS may change when copied; retain source size.
     const copiedSize = sizeOf(b);
     const sourceCS = getComputedStyle(b);
-    c.style.width = sourceCS.width;
-    c.style.height = sourceCS.height;
+    c.style.setProperty('width', sourceCS.width, b.style.getPropertyPriority('width'));
+    c.style.setProperty('height', sourceCS.height, b.style.getPropertyPriority('height'));
     c.dataset.title = `${b.dataset.title || old} 副本`;
     c.removeAttribute("data-editor-current");
     [c, ...c.querySelectorAll("[contenteditable]")].forEach((n) =>

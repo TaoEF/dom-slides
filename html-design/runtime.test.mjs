@@ -307,3 +307,143 @@ test("removing the last inline property preserves authored style-attribute selec
   assert.ok(changed.includes('data-el="other" style=""'));
   await request("cancel", s);
 });
+test("review: source patches preserve self-closing SVG siblings and unquoted trailing slash values", async () => {
+  const source = html.replace(
+    "</section>",
+    '<svg width="200" height="100"><rect data-el="rect" width="20" height="20"/><rect data-el="next" x="30" width="20" height="20"/></svg><div data-el=slash/>trailing slash</div></section>',
+  );
+  const { sessionFile, s } = await session("svg-source", source);
+  await applySession(
+    sessionFile,
+    patch(s.revision, [
+      {
+        op: "setStyle",
+        pageId: "p1",
+        elementId: "rect",
+        style: { color: "blue" },
+      },
+      {
+        op: "setStyle",
+        pageId: "p1",
+        elementId: "slash/",
+        style: { color: "blue" },
+      },
+    ]),
+  );
+  const next = await readFile(s.workFile, "utf8");
+  assert.ok(next.includes('height="20" style="color: blue;"/>'));
+  assert.ok(next.includes("data-el=slash/ style="));
+  const { parse } = await import("parse5");
+  const tree = parse(next);
+  const find = (n, id) =>
+    n.attrs?.some((a) => a.name === "data-el" && a.value === id)
+      ? n
+      : (n.childNodes || []).map((c) => find(c, id)).find(Boolean);
+  assert.equal(find(tree, "rect").parentNode, find(tree, "next").parentNode);
+  assert.equal(
+    find(tree, "slash/").attrs.find((a) => a.name === "data-el").value,
+    "slash/",
+  );
+  await request("cancel", s);
+});
+test("review: malformed tokens reject atomically and no-op tokens preserve all source bytes", async () => {
+  const { sessionFile, s } = await session("token-validation");
+  await assert.rejects(
+    applySession(
+      sessionFile,
+      patch(s.revision, [{ op: "setToken", name: "--brand", value: "var(" }]),
+    ),
+    /Invalid design-token/,
+  );
+  assert.equal(await readFile(s.workFile, "utf8"), html);
+  const r = await applySession(
+    sessionFile,
+    patch(s.revision, [{ op: "setToken", name: "--brand", value: "#123456" }]),
+  );
+  assert.equal(r.status, "no-op");
+  assert.equal(await readFile(s.workFile, "utf8"), html);
+  await request("cancel", s);
+});
+test("review: embedded font and image decoding errors remain explicit and refuse every staged mutation", async () => {
+  for (const kind of ["font", "image"]) {
+    const source =
+      kind === "font"
+        ? html.replace(
+            "</style></head>",
+            "@font-face{font-family:Corrupt;src:url(data:font/woff2;base64,AAECAwQ=)}p{font-family:Corrupt,Arial}</style></head>",
+          )
+        : html.replace(
+            "</section>",
+            '<img data-el="bad" src="data:image/png;base64,AAAA"></section>',
+          );
+    const { sessionFile, s } = await session(`decode-${kind}`, source);
+    const state = await inspectFile(s.workFile, {
+      baseUrl: `${origin}/decode-${kind}.html`,
+    });
+    assert.equal(state.status, "issues");
+    assert.ok(
+      kind === "font"
+        ? state.resources.fontsFailed > 0
+        : state.resources.imagesFailed > 0,
+    );
+    await assert.rejects(
+      applySession(
+        sessionFile,
+        patch(s.revision, [
+          {
+            op: "replaceText",
+            pageId: "p1",
+            elementId: "title",
+            text: "Must not apply",
+          },
+        ]),
+      ),
+      /decoding failed/,
+    );
+    assert.equal(await readFile(s.workFile, "utf8"), source);
+    await request("cancel", s);
+  }
+});
+
+test("review: a mutation activating a corrupt font face also rejects without staging", async () => {
+  const source = html
+    .replace("<b>Bold</b> keep", "Plain keep")
+    .replace(
+      "</style></head>",
+      '@font-face{font-family:Variant;src:local("Arial"),local("Liberation Sans");font-weight:400}@font-face{font-family:Variant;src:url(data:font/woff2;base64,AAECAwQ=);font-weight:700}p{font-family:Variant;font-weight:400}</style></head>',
+    );
+  const { sessionFile, s } = await session("decode-after-style", source);
+  const state = await inspectFile(s.workFile, {
+    baseUrl: `${origin}/decode-after-style.html`,
+  });
+  assert.equal(state.resources.fontsFailed, 0);
+  await assert.rejects(
+    applySession(
+      sessionFile,
+      patch(s.revision, [
+        {
+          op: "setStyle",
+          pageId: "p1",
+          elementId: "title",
+          style: { "font-weight": "700" },
+        },
+      ]),
+    ),
+    /font decoding failed/,
+  );
+  assert.equal(await readFile(s.workFile, "utf8"), source);
+  await request("cancel", s);
+});
+
+test("source integrity: unrepresentable HTML text is rejected before staging", () => {
+  for (const text of ["NUL\0", "CR\rLF", "\ud800"])
+    assert.throws(
+      () =>
+        validatePatch(
+          patch(revisionOf(html), [
+            { op: "replaceText", pageId: "p1", elementId: "title", text },
+          ]),
+        ),
+      /well-formed Unicode/,
+    );
+});

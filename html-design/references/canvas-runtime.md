@@ -22,7 +22,7 @@ Environment: 1280×900 CSS-pixel viewport, device scale1; animations and editor
 stage transforms disabled. Geometry uses artboard-relative transformed
 border-box bounds; local sizes/angle report supported geometry only. This is
 not a guarantee of matching another window's media queries or interactive DOM.
-Fonts settle before measurement; resource failures remain explicit. Per-page
+Fonts settle before measurement; network and embedded decode failures remain explicit. Staging also waits for faces activated by mutations and rejects failed required fonts/images. Per-page
 size contains actual border-box dimensions and inline/computed declarations.
 
 The design section returns up to64 root design-token declarations and computed values; editable:false explicitly marks unsupported stylesheet structure.
@@ -71,7 +71,7 @@ in `style`. Omitted properties remain unchanged. `null` explicitly removes an
 inline declaration, exposing authored CSS. Unknown fields, unsafe values,
 unsupported targets and stale revisions reject the entire batch before writing.
 No default values are synthesized. One operation/target and1–32 operations/batch.
-Plain-text replacement refuses nested/rich markup and escapes HTML characters.
+Plain-text replacement refuses nested/rich markup and escapes HTML characters. Text must be well-formed Unicode with LF newlines and no NUL; HTML-parser normalization must not silently change the requested text.
 
 Style allowlist: color,background-color,font-size,font-weight,line-height,
 letter-spacing,text-align,width,height,min-width,max-width,min-height,max-height,
@@ -85,7 +85,7 @@ inline `style[data-design]` containing a single `:root` rule. Complex token CSS
 is explicitly unsupported. Token writes affect the document and may be masked
 by local overrides. No assumption that changing a declaration changes rendering.
 
-A batch renders in an isolated browser first and writes exact source ranges;
+A batch renders in an isolated browser first, writes exact source ranges, and reparses to verify unchanged element/attribute structure (except intended style fields);
 unrelated HTML bytes stay unchanged. `changes` distinguishes applied/no-op;
 failed batches return status failed and no work-copy write. No-op keeps byte
 identity. Lease and work revision are rechecked before replacement, and a local

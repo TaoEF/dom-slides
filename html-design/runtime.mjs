@@ -89,9 +89,14 @@ export function validatePatch(request) {
     used.add(key);
     if (
       op.op === "replaceText" &&
-      (typeof op.text !== "string" || op.text.length > 20000)
+      (typeof op.text !== "string" ||
+        op.text.length > 20000 ||
+        !op.text.isWellFormed() ||
+        /[\u0000\r]/.test(op.text))
     )
-      throw new Error("Text must be at most 20000 UTF-16 units.");
+      throw new Error(
+        "Text must be well-formed Unicode, use LF newlines, contain no NUL, and be at most 20000 UTF-16 units.",
+      );
     if (
       op.op === "setPageSize" &&
       ![op.width, op.height].every(
@@ -270,12 +275,19 @@ function sourceChanges(html, operations, results) {
         end: a.endOffset,
         text: text === null ? "" : `style="${encode(text)}"`,
       });
-    else if (text)
+    else if (text) {
+      // Insert after the last actual attribute: keep SVG '/>' and unquoted
+      // attribute values ending with '/' intact without guessing tokenizer state.
+      const position = Math.max(
+        l.startTag.startOffset + 1 + n.tagName.length,
+        ...Object.values(l.attrs || {}).map((a) => a.endOffset),
+      );
       edits.push({
-        start: l.startTag.endOffset - 1,
-        end: l.startTag.endOffset - 1,
+        start: position,
+        end: position,
         text: ` style="${encode(text)}"`,
       });
+    }
   }
   for (let i = 0; i < operations.length; i++) {
     const op = operations[i],
@@ -317,6 +329,18 @@ function sourceChanges(html, operations, results) {
       throw new Error("Overlapping source patches are unsupported.");
   for (const edit of edits.reverse())
     html = html.slice(0, edit.start) + edit.text + html.slice(edit.end);
+  const structure = (node) => [
+    node.nodeName,
+    node.namespaceURI || null,
+    (node.attrs || [])
+      .filter((a) => a.name !== "style")
+      .map((a) => [a.name, a.value]),
+    (node.childNodes || []).filter((n) => n.tagName).map(structure),
+  ];
+  if (
+    JSON.stringify(structure(tree)) !== JSON.stringify(structure(parse(html)))
+  )
+    throw new Error("Source patch changed the document structure.");
   return html;
 }
 export async function applySession(sessionFile, request) {

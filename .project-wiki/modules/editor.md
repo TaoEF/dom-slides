@@ -5,7 +5,7 @@ status: active
 owners:
   - html-design/src/
   - html-design/editor.js
-updated: 2026-10-30
+updated: 2026-11-09
 sources:
   - path: html-design/src/editor.js
     status: current
@@ -162,3 +162,5 @@ Ctrl/⌘ G、Shift G与菜单共用组合/取消动作及写权限守卫；Ctrl/
 ## Independent artboard sizing
 
 Issue36在预览页面菜单增加画布尺寸，页级CSS border-box px，保留box-sizing。预设和自定义只作用当前页；已有响应式内容自然布局，不整体缩放。通过页面管理租约和单步历史保存原style（含缺失）；冲突CSS回滚。尺寸输入草稿阻止外部接管，确认走同一输入保护；复制显式保留源尺寸。artboard-size.js供UI与Runtime复用。Chrome CSSOM设置后removeAttribute可能留下空style，回滚先显式设置原字符串再移除缺失状态。
+
+唯一审查修复：复制尺寸必须用setProperty保留原inline !important；只显示当前页时，复制页的尺寸校验必须在withAll中测量。

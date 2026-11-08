@@ -42,3 +42,7 @@ HTML/CSS/DOM是真值。JSON为有界派生状态。明确saved-file与AI-work-c
 ## Update Rules
 
 接口语义、范围、源快照或持久化边界变化时同步引用文档和测试。
+
+## Independent review repairs
+
+SVG自闭合标记与未引号值中的尾斜线不能靠字符串尾部猜测；新增style放在parse5最后一个真实属性之后，写完重解析结构保持。token先验证CSS接受，声明无变化不重排样式表。document.fonts.ready不代表所有FontFace解码成功；显式检查error和img.decode失败，修改激活新字重字体也要等就绪并拒绝失败。
