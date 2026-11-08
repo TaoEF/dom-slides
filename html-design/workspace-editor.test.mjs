@@ -380,3 +380,25 @@ test("editable workspace desktop/narrow keeps original navigation and reachable 
     } finally { await p.close(); }
   }
 });
+
+
+test("review: target forced rotation and hidden rich-text descendants reject moves and copies atomically", async () => {
+  for (const css of ["p{rotate:90deg!important}", "b{display:none!important}"])
+    for (const copy of [false, true]) {
+      const p = await open();
+      try {
+        await zoom(p, 1);
+        await p.addStyleTag({content: css.replace(/^([pb])/, "[data-artboard=p2] $1")});
+        const before = await p.locator("[data-el=a]").evaluate(n => n.outerHTML);
+        await drag(p, "a", {copy});
+        assert.equal(await parent(p, "a"), "p1");
+        assert.equal(await p.locator("[data-el=a]").evaluate(n => n.outerHTML), before);
+        assert.equal(await p.locator("[data-artboard=p2] [data-el]").count(), 1);
+        assert.equal(await p.locator("[data-el=a] b").isVisible(), true);
+        assert.equal(await p.locator(".workspace-ghost").count(), 0);
+        assert.equal(await p.locator("[data-editor-drop-target]").count(), 0);
+        assert.equal(await p.locator("[data-act=undo]").isEnabled(), false);
+        assert.deepEqual(p.errors, []);
+      } finally { await p.close(); }
+    }
+});

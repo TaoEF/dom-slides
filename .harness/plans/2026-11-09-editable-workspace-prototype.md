@@ -25,4 +25,11 @@ Repo-Issue-Manager and Dev-Manager root admit Developer root to this user-author
 - Focused pointer/text/group/clipboard/serialization/export coverage: nine cases passed; managed autosave/reopen/viewer lease and desktop1440/narrow640 cases passed separately.
 - Real browser sample: explicit Edit → selected p1-tag → dragged to portrait p2 (current-page/thumbnail synchronized) → one Undo restored p1 → Fit all. Saved state reached. No direct demo overwrite; white background and bundle patch used AI handoff.
 - Bounded desktop/narrow screenshots in .html-design/evidence/. Detector returned no regex findings, degraded because optional parser modules were unavailable; no claim of full computed/a11y detection. Wiki/project checks and whitespace check passed.
-- Full default suite remains running during candidate freeze; exact result will be recorded before handoff. New cases were added before their test file was scheduled, final log is source of test count.
+- Full default suite at528d807:232/232 passed, no skipped/fail (/tmp/dom-workspace-editor-full.log). Clean FF candidate from exact origin/main3fcca5c passed27/27 workspace+original UI checks (/tmp/dom-workspace-acceptance.log).
+
+
+## Independent audit and focused repair
+- Exactly one isolated read-only audit: e190ad139ba6a049e77e1053dfe022d93c4e7871..528d80747d2df4e9edd50dc746d571611c40f393, reviewer editable_workspace_audit. Two accepted P2 findings: target CSS could force a different angle; target CSS could hide a rich-text descendant while the root dimensions stayed constant.
+- Repair compares normalized resulting angle, visibility/display/content-visibility and rendered subtree bounds against capture. Inline root blockification caused by absolute placement is allowed only with matching subtree geometry. Conflicts restore parents/order/attributes atomically for move and copy; no extra history action or orphan clones.
+- Focused repair verification:12/12 workspace tests including actual-pointer forced-rotation/hidden-descendant move+copy regressions (/tmp/dom-workspace-review-fixes.log). Full232 run is pre-repair evidence; repair scope is opt-in transfer validation. No routine second audit/full rerun.
+- Latest prototype script upgraded via begin/commit handoff, with non-script bytes unchanged. Final delivery packet in ignored .html-design/workspace-delivery.md records exact revision, clean candidate and stable preview. No push/PR/main integration/deployment authorized.

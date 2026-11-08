@@ -83,7 +83,11 @@ export function createWorkspaceTransfer({
           const frame = selectionFrame([node]);
           if (frame) writeGroupAngle(pairs.get(node), frame.angle);
         }
-      return { source, template, pairs, leaves };
+      const frames = originals.map((node) => {
+        const r = node.getBoundingClientRect();
+        return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height };
+      });
+      return { source, template, pairs, leaves, frames };
     });
     return {
       objects,
@@ -191,6 +195,9 @@ export function createWorkspaceTransfer({
       if (!stableGroupMarkup(board))
         throw new Error("目标容器无法保留这个对象的 HTML 结构，本次已保留原样");
       const visual = [
+        "display",
+        "visibility",
+        "content-visibility",
         "color",
         "font-family",
         "font-size",
@@ -217,18 +224,39 @@ export function createWorkspaceTransfer({
         for (let j = 0; j < nodes.length; j++)
           for (const key of visual) {
             const wanted = templates[j].style.getPropertyValue(key);
-            if (
-              wanted &&
-              getComputedStyle(nodes[j]).getPropertyValue(key) !== wanted
-            )
+            const actual = getComputedStyle(nodes[j]).getPropertyValue(key);
+            // Absolute placement blockifies inline roots; their internal layout
+            // still has to pass the rendered-geometry checks below.
+            const blockified = key === "display" && actual === "block" &&
+              wanted === "inline" && packet.objects[i].leaves.some(l => l.copy === templates[j]);
+            if (wanted && actual !== wanted && !blockified)
               throw new Error("目标画布的 CSS 改变了对象样式，本次已保留原样");
           }
+      }
+      // A fixed root box can conceal hidden/reflowed descendants. Check the
+      // rendered subtree too, in the same viewport coordinate system as capture.
+      for (let i = 0; i < result.length; i++) {
+        const nodes = [result[i], ...result[i].querySelectorAll("*")];
+        const k = S.zoom / packet.zoom;
+        for (let j = 0; j < nodes.length; j++) {
+          const before = packet.objects[i].frames[j];
+          if (!before.w && !before.h) continue; // e.g. display:contents wrappers
+          const r = nodes[j].getBoundingClientRect();
+          const cx = center ? center.x + (before.cx - packet.cx) * k : before.cx;
+          const cy = center ? center.y + (before.cy - packet.cy) * k : before.cy;
+          if (Math.abs(r.left + r.width / 2 - cx) > 1 ||
+              Math.abs(r.top + r.height / 2 - cy) > 1 ||
+              Math.abs(r.width - before.w * k) > 1 ||
+              Math.abs(r.height - before.h * k) > 1)
+            throw new Error("目标画布改变了对象内部布局，本次已保留原样");
+        }
       }
       for (const item of expected) {
         const g = elementGeometry(item.node),
           k = S.zoom / packet.zoom;
         if (
           !g.supported ||
+          Math.abs(((g.angle - item.g.angle + 180) % 360 + 360) % 360 - 180) > 0.01 ||
           Math.abs(g.cx - item.cx) > 1 ||
           Math.abs(g.cy - item.cy) > 1 ||
           Math.abs(g.w * g.scale - item.g.w * item.g.scale * k) > 1 ||

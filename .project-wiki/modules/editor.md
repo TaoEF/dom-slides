@@ -166,3 +166,5 @@ Ctrl/⌘ G、Shift G与菜单共用组合/取消动作及写权限守卫；Ctrl/
 workspace-transfer.js保存临时手势/剪贴板快照：同页逻辑roots跨frame移动保留ID，Alt复制与带内部MIME标识的C/V重新键控ID；typing/外部图片粘贴沿原入口。只有被迁移对象固定computed样式并按落点绝对定位，不拆其他页面；支持正向均匀2D几何，无生成内容，目标结构/样式/几何不等价时拒绝恢复。移动Undo恢复父/次序/属性，复制Undo移除原clone，Redo保留clone身份。不是完整CSS组件移植或跨frame多选。
 
 原型视图坐标、labels、ghost和drop attrs不进序列化/导出；HTML/CSS/DOM继续是真值。旧只读原型保留，新建workspace-editor.html；活跃新稿仍通过begin/commit升级，不直接重建。技术边界与用例见prototypes/README.md和harness实现计划。
+
+跨画布样式冲突不能只检查根框宽高：目标 CSS 的独立 rotate 可能改变方向，后代 display/visibility 可能隐藏富文本但不改变根框。原型转移需同时检查归一化角度、可见性/显示方式和已渲染子树边界；不一致整体回滚（移动和复制均覆盖）。
