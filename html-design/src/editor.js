@@ -374,7 +374,7 @@ import {
       ui.querySelectorAll("[data-act=page-add]").forEach((n) => {
         n.disabled = !manageable;
       });
-      ["page-copy", "page-delete", "page-rename"].forEach(act => ui.querySelectorAll(`[data-act=${act}]`).forEach(n => { n.disabled = !manageable || !b; }));
+      ["page-copy", "page-delete", "page-rename", "page-size"].forEach(act => ui.querySelectorAll(`[data-act=${act}]`).forEach(n => { n.disabled = !manageable || !b; }));
       ["page-up", "page-down"].forEach((act, i) => {
         $(`[data-act=${act}]`).disabled =
           !manageable ||
@@ -1333,6 +1333,7 @@ import {
       "keydown",
       (e) => {
         if (e.isComposing || e.keyCode===229 || S.composing) { if(S.editing || fromUI(e))e.stopImmediatePropagation(); return; }
+        if (pages.sizeKey(e)) return;
         if (!helpDialog.hidden) {
           if(e.key==='Escape') { e.preventDefault(); closeHelp(); }
           else if(e.key==='Tab') {
@@ -1794,6 +1795,7 @@ import {
       "page-copy": () => pages.copy(),
       "page-delete": () => pages.remove(),
       "page-rename": () => pages.rename(),
+      "page-size": () => pages.openSize(),
       "page-up": () => pages.moveStep(-1),
       "page-down": () => pages.moveStep(1),
       "image-replace": () => pickReplace(S.sel),
@@ -2265,7 +2267,7 @@ import {
       fileName,
     });
     addEventListener("beforeunload", (e) => {
-      if (S.changed || crop.active || sourcePending() || pages.hasPendingRename()) {
+      if (S.changed || crop.active || sourcePending() || pages.hasPendingDraft()) {
         e.preventDefault();
         e.returnValue = "";
       }
@@ -2302,9 +2304,9 @@ import {
         S.changed = value;
       },
       isBusy: () => !!S.drag || crop.active || sourcePending(),
-      hasPendingSource: () => sourcePending() || pages.hasPendingRename(),
+      hasPendingSource: () => sourcePending() || pages.hasPendingDraft(),
       pause() {
-        if (sourcePending() || pages.hasPendingRename()) return false;
+        if (sourcePending() || pages.hasPendingDraft()) return false;
         if (S.drag) {
           const drag = S.drag; S.drag = null;
           if (drag.kind === "page") drag.cancel(); else drag.up();
@@ -2315,7 +2317,7 @@ import {
       reload: reloadLatest,
       historyBoundary() { S.group = null; S.undo = []; S.redo = []; select(null); syncBar(); },
       prepareReview(kind) {
-        if (sourcePending() || (pages.hasPendingRename() && kind !== "rename")) return false;
+        if (sourcePending() || (pages.hasPendingDraft() && kind !== "rename")) return false;
         editRequested = false;
         if (S.drag) { const drag = S.drag; S.drag = null; if (drag.kind === "page") drag.cancel(); else drag.up(); }
         setEditing(false);

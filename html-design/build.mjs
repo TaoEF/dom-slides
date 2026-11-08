@@ -23,3 +23,4 @@ await build({
   outfile: "html-design/text-measure.js", legalComments: "none", charset: "utf8",
   banner: { js: "/*! Pretext: " + pretextLicense + " */" },
 });
+await build({entryPoints:['html-design/src/runtime-browser.js'],bundle:true,format:'iife',target:['es2022'],outfile:'html-design/runtime-browser.js',legalComments:'none',charset:'utf8'});
