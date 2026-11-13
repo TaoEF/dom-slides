@@ -592,6 +592,15 @@ button.primary:hover:not(:disabled) {
   border-radius: 6px;
   font-size: 12px;
 }
+.shape-palette { display: grid; grid-template-columns: repeat(4, 42px); gap: 4px; min-width: 0; padding: 8px; }
+.shape-palette[hidden] { display: none; }
+.shape-palette button { width: 42px; height: 42px; padding: 9px; justify-content: center; }
+.shape-palette svg { width: 24px; height: 24px; }
+.shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }
+.shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.shape-color input { width: 25px; height: 25px; border: 0; padding: 0; background: transparent; cursor: pointer; }
+.shape-number input[type=number] { width: 42px; height: 25px; border: 0; border-radius: 4px; padding: 0 3px; color: #222; }
+.shape-adjust input { width: 82px; }
 .menu-panel .icon {
   width: 16px;
   height: 16px;
@@ -885,6 +894,7 @@ textarea {
   }
   .head {
     padding-inline: 6px;
+    gap: 2px;
   }
   .head button {
     padding-inline: 5px;
@@ -910,6 +920,12 @@ textarea {
   .head .document-title { display: none; }
   .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }
   .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }
+  .head .tools { gap: 0; }
+  .head .layout-toggle { margin-inline: 0; }
+  .head .layout-toggle button { padding-inline: 3px; font-size: 10px; }
+  .head .tools > [data-act="add-text"],
+  .head .tools > [data-act="add-image"],
+  .head .tools > [data-act="add-shape"] { width: 27px; min-width: 27px; padding: 0; }
   .head .actions { flex: initial; }
   .head [data-act="export"] > .icon:last-child {
     display: none;

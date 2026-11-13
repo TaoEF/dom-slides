@@ -7,6 +7,7 @@ import { createPages } from "./pages.js";
 import { textMetrics, scaleText } from "./typography.js";
 import { createTextLayout } from "./text-layout.js";
 import { icon } from "./icons.js";
+import { makeShape, renderShape, shapeHasFill, shapeHasAdjust } from './shapes.js';
 import { rekeyDOMIds } from "./identifiers.js";
 import { createGuides } from "./guides.js";
 import { layerChanges } from "./layers.js";
@@ -341,6 +342,8 @@ import {
         "artboard",
         "add-text",
         "add-image",
+        "add-shape",
+        "shape-insert",
         "src-apply",
         "image-replace",
         "image-fit",
@@ -813,6 +816,15 @@ import {
       s.removeAllRanges();
       s.addRange(r);
     }
+    function addShape(kind) {
+      const b = activeBoard();
+      if (!b || !visible(b) || !persistence?.canEdit()) return;
+      endText();
+      const el = makeShape(kind, elementId(b, 'shape'));
+      if (!el) return;
+      placeNew(el, b, 220, kind === 'line' || kind === 'arrow' ? 44 : 132);
+      select(el);
+    }
     function addImage(src) {
       const b = activeBoard();
       if (!b || !visible(b) || !persistence?.canEdit()) return;
@@ -1054,6 +1066,17 @@ import {
       $(".text-tools").hidden = !text;
       $(".more-text-section").hidden = !text;
       $(".image-tools").hidden = !image;
+      const shape = !multi && el.matches('svg[data-shape]');
+      $(".shape-tools").hidden = !shape;
+      if (shape) {
+        for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust })) {
+          const input = $(`[data-shape-prop=${prop}]`);
+          if (ui.activeElement !== input) input.value = value;
+        }
+        $('.shape-color').hidden = !shapeHasFill(el.dataset.shape);
+        $('.shape-adjust').hidden = !shapeHasAdjust(el.dataset.shape);
+        $('.shape-adjust').firstChild.textContent = ({ rect: '圆角', star: '尖角', arrow: '箭头', blockArrow: '箭头' })[el.dataset.shape] || '调整';
+      }
       if (image) {
         const fit = getComputedStyle(el).objectFit;
         $("[data-act=image-fit]").setAttribute(
@@ -1541,6 +1564,8 @@ import {
         S.replace = null;
         fileIn.click();
       },
+      "add-shape": (btn) => openMenu('shape', btn),
+      "shape-insert": (btn) => addShape(btn.dataset.shapeKind),
       undo: () => history(-1),
       redo: () => history(1),
       "page-add": () => pages.add(),
@@ -1610,6 +1635,7 @@ import {
       "artboard",
       "add-text",
       "add-image",
+      "shape-insert",
       "undo",
       "redo",
       "src-apply",
@@ -1635,7 +1661,7 @@ import {
       const act = btn.dataset.act;
       if (!act) return;
       if (
-        !["preview", "export", "more", "status", "element-more", "text-layout"].includes(act)
+        !["preview", "export", "more", "status", "element-more", "text-layout", "add-shape"].includes(act)
       )
         closeMenus();
       if (
@@ -1644,6 +1670,18 @@ import {
       )
         return;
       ACTS[act]?.(btn);
+    });
+    ui.addEventListener('change', (e) => {
+      const prop = e.target.dataset?.shapeProp;
+      const el = S.sel;
+      if (!prop || !el?.matches('svg[data-shape]') || !S.editing || !persistence?.canEdit()) return;
+      const field = { fill: 'shapeFill', stroke: 'shapeStroke', width: 'shapeWidth', adjust: 'shapeAdjust' }[prop];
+      if (!field) return;
+      const before = snap([el], true);
+      el.dataset[field] = e.target.value;
+      renderShape(el);
+      commit(before, el.closest('[data-artboard]'));
+      drawSel();
     });
     ui.addEventListener("keydown", (e) => {
       if (!modal.hidden && e.key === "Tab") {

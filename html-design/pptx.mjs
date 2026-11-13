@@ -86,6 +86,27 @@ export function collectEditableSlide(board) {
     if (cs.backgroundImage !== 'none' || cs.filter !== 'none') warnings.push(`${name}: 复杂背景或滤镜`);
     if (el.matches('img')) {
       emit(el, { kind: 'image', ...box, name, source: el.currentSrc || el.src, naturalWidth: el.naturalWidth, naturalHeight: el.naturalHeight, fit: cs.objectFit, opacity: Number(cs.opacity) });
+    } else if (el.matches('svg[data-shape]')) {
+      const kind = el.dataset.shape;
+      const native = { rect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', diamond: 'diamond', star: 'star5', line: 'line', arrow: 'line', blockArrow: 'rightArrow' }[kind];
+      const hex = value => /^#[0-9a-f]{6}$/i.test(value || '') ? value.slice(1).toUpperCase() : '1D1D1F';
+      const drawing = el.firstElementChild;
+      const bounds = drawing?.getBBox?.(), matrix = drawing?.getScreenCTM?.();
+      const corners = bounds && matrix ? [
+        [bounds.x, bounds.y], [bounds.x + bounds.width, bounds.y],
+        [bounds.x, bounds.y + bounds.height], [bounds.x + bounds.width, bounds.y + bounds.height],
+      ].map(([x, y]) => new DOMPoint(x, y).matrixTransform(matrix)) : [];
+      const painted = corners.length ? {
+        x: Math.min(...corners.map(p => p.x)) - origin.left,
+        y: Math.min(...corners.map(p => p.y)) - origin.top,
+        w: Math.max(...corners.map(p => p.x)) - Math.min(...corners.map(p => p.x)),
+        h: Math.max(...corners.map(p => p.y)) - Math.min(...corners.map(p => p.y)),
+      } : box;
+      if (native) emit(el, { kind: 'nativeShape', ...painted, name, native, shapeKind: kind,
+        fill: hex(el.dataset.shapeFill), stroke: hex(el.dataset.shapeStroke),
+        width: Number(el.dataset.shapeWidth) || 0, adjust: Number(el.dataset.shapeAdjust) || 0 });
+      else emit(el, { kind: 'graphic', ...box, name, index: graphics.indexOf(el) });
+      if (['star', 'arrow', 'blockArrow'].includes(kind)) warnings.push(`${name}: PPTX 原生形状的细部参数可能与 HTML 不同`);
     } else if (el.matches('svg,canvas')) {
       emit(el, { kind: 'graphic', ...box, name, index: graphics.indexOf(el) });
     } else if (el.hasAttribute('data-el') && !el.querySelector('[data-el]') && el.textContent.trim()) {
@@ -185,7 +206,19 @@ export async function addEditableSlide({ pptx, slide, data, page, board, context
   slide.background = { color: data.background.transparency === 100 ? 'FFFFFF' : data.background.color };
   for (const item of data.items) {
     const position = { x: px(item.x), y: px(item.y), w: px(item.w), h: px(item.h), objectName: item.name };
-    if (item.kind === 'shape') {
+    if (item.kind === 'nativeShape') {
+      const isLine = item.native === 'line';
+      slide.addShape(pptx.ShapeType[item.native], {
+        ...position,
+        y: isLine ? px(item.y + item.h / 2) : position.y,
+        h: isLine ? 0 : position.h,
+        fill: isLine ? { color: 'FFFFFF', transparency: 100 } : { color: item.fill },
+        line: { color: item.stroke, width: pt(Math.max(isLine ? 1 : 0, item.width)),
+          transparency: item.width ? 0 : 100,
+          endArrowType: item.shapeKind === 'arrow' ? 'triangle' : undefined },
+        rectRadius: item.shapeKind === 'rect' ? px(item.adjust * Math.min(item.w / 200, item.h / 120)) : undefined,
+      });
+    } else if (item.kind === 'shape') {
       slide.addShape(pptx.ShapeType[item.geometry], {
         ...position, fill: { color: item.fill.color, transparency: 100 - (100 - item.fill.transparency) * item.opacity },
         line: item.stroke ? { color: item.stroke.color.color,
