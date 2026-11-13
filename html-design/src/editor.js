@@ -652,7 +652,7 @@ import {
         !el.querySelector("[data-el],img,svg,canvas,video,iframe") &&
         !!el.textContent.trim();
       const metrics = text && dir.length === 2 ? textMetrics(el) : null;
-      const before = snap(metrics ? metrics.map((m) => m.node) : [el]);
+      const before = snap(metrics ? metrics.map((m) => m.node) : [el], el.matches('svg[data-shape]'));
       const hp = media || el.style.height ? "height" : "minHeight";
       if (getComputedStyle(el).display === "inline")
         el.style.display = "inline-block";
@@ -693,6 +693,7 @@ import {
             el.style.width = Math.round(w * 1000) / 1000 + "px";
           if (dir !== "e" && dir !== "w")
             el.style[hp] = Math.round(h * 1000) / 1000 + "px";
+          if (el.matches('svg[data-shape]')) renderShape(el, { width: w, height: h });
           setPos(
             el,
             p,

@@ -601,7 +601,7 @@ button.primary:hover:not(:disabled) {
 .shape-palette svg { width: 24px; height: 24px; }
 .shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }
 .shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.shape-stroke-color .shape-swatch { background: #fff; border: 3px solid currentColor; }
+.shape-stroke-color .shape-swatch { background: transparent; border: 3px solid currentColor; }
 .shape-width-control { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }
 .shape-number-field { display: inline-flex; align-items: center; height: 29px; width: 52px; border-radius: 5px; background: #383838; }
 .shape-number-field input { width: 35px; min-width: 0; height: 27px; border: 0; padding: 0 2px; outline: 0; background: transparent; color: #fff; text-align: center; appearance: textfield; font-variant-numeric: tabular-nums; }

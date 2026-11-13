@@ -7,6 +7,7 @@
 - 拖动移动元素，双击改字或换图。文字角点同比缩放字号、内部小字和行距，边点只调整框；图片提供「适应」完整显示与「填充」裁切铺满。可用顶部入口插入文字/图片，也可拖入或粘贴图片。
 - 顶部「自动排版 / 手动」只切换当前页；切回自动排版恢复该页快照，原绝对定位 CSS 不会自动变成 Flex。
 - 文字「更多 → 文字适配」检测溢出，提供「高度随内容」与「缩小字号适配」（最小6px），均可单步撤销。
+- 顶部形状入口可插入八种基础形状。选中后圆形色样分别控制填充、描边，线宽用数字或箭头调整，部分形状有圆角或尖角参数。拉伸时线宽与圆角保持设计像素值。
 - 预览即可拖动缩略图排序、点「＋」新增，页面「⋯」可复制、重命名、删除、上下移动；缩略图支持 Ctrl/⌘ D、Delete、Alt + ↑/↓。拖动取消不提交排序。
 - 翠绿色辅助线提示页面/元素边缘和中心吸附；Alt/Option 暂停吸附，Esc 取消拖动。蓝色选框和控制点表示选择。
 
@@ -16,6 +17,18 @@
 - Ctrl/⌘ Z 撤销，Ctrl/⌘ Shift Z 重做，Ctrl/⌘ D 复制，Delete 删除。AI「放弃」是受保护的审阅恢复，成功刷新后清空此前普通撤销历史，不能用普通重做跨越恢复。
 - Ctrl/⌘ + − 0 1 或 Ctrl/⌘ 加滚轮缩放；编辑时空格加拖动平移，「适应」回到居中。
 - 「播放」下拉提供连续滚动和单页全屏播放。方向键、PageUp/PageDown、空格翻页，Esc 返回预览并保留当前页；受限浏览器可能改用当前窗口播放。
+
+## AI 生成形状
+
+在完整源码根目录调用 `html-design/src/shapes.js` 的 `shapeMarkup`，用参数一次生成可离线显示、可编辑的 SVG：
+
+```js
+import { shapeMarkup } from './html-design/src/shapes.js';
+const svg = shapeMarkup({ id: 'p1-card-arrow', kind: 'blockArrow', width: 240, height: 72,
+  fill: '#86868b', stroke: '#383838', strokeWidth: 2, adjust: 24 });
+```
+
+将返回的完整 `<svg>` 放在对应画板中，并保持 `data-el` 唯一。`kind` 可取 `rect`、`ellipse`、`triangle`、`diamond`、`star`、`line`、`arrow`、`blockArrow`；`strokeWidth` 范围 0–16，`adjust` 范围 0–50，`width/height` 至少 8px。修改现有形状参数时，须同时更新 SVG 子节点；只改 `data-shape-*` 不会改变离线画面。编辑器的参数工具会自动同步两者。
 
 ## 保存、审阅与导出
 

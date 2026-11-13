@@ -11,14 +11,14 @@
     [data-artboard]{box-sizing:border-box;width:1280px;height:720px;overflow:hidden;background:var(--paper);padding:72px 88px}
     h1{font-size:52px;letter-spacing:-.04em;margin:0 0 16px}
     p{font-size:18px;color:var(--muted);margin:0;max-width:740px}
-    .workspace{height:180px;margin-top:32px;border:1px dashed #d9d9de;border-radius:20px;display:flex;align-items:center;justify-content:center;color:#a0a0a9;font-size:20px}
+    .workspace{height:180px;margin-top:32px;border:1px dashed #d9d9de;border-radius:20px;display:flex;align-items:center;justify-content:center;gap:32px;color:#a0a0a9;font-size:20px}
   </style>
 </head>
 <body>
 <main data-stage><section data-artboard="p1" data-title="形状工具验收" data-mode="flow">
   <h1 data-el="p1-title">Shapes, simply.</h1>
   <p data-el="p1-intro">点击“编辑”，再用顶部形状按钮插入图形。选中图形可调整颜色、线宽与部分几何参数。</p>
-  <div data-el="p1-workspace" class="workspace"><span data-el="p1-placeholder">在这里试试图形</span></div>
+  <div data-el="p1-workspace" class="workspace"><svg data-el="p1-stroke-demo" data-shape="rect" aria-label="矩形" data-shape-fill="#86868b" data-shape-stroke="#383838" data-shape-width="8" data-shape-adjust="18" viewBox="0 0 220 132" preserveAspectRatio="none" style="width:220px;height:132px;display:block;overflow:visible"><rect x="4" y="4" width="212" height="124" rx="18" fill="#86868b" stroke="#383838" stroke-width="8" stroke-linejoin="round"/></svg><span data-el="p1-placeholder">拉伸图形，观察描边</span></div>
 </section></main>
 <script data-editor src="../html-design/editor.js"></script>
 </body>

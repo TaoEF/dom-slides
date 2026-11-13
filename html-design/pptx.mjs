@@ -89,6 +89,8 @@ export function collectEditableSlide(board) {
     } else if (el.matches('svg[data-shape]')) {
       const kind = el.dataset.shape;
       const native = { rect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', diamond: 'diamond', star: 'star5', line: 'line', arrow: 'line', blockArrow: 'rightArrow' }[kind];
+      const view = el.viewBox.baseVal;
+      const radiusScale = view.width && view.height ? Math.min(box.w / view.width, box.h / view.height) : 1;
       const hex = value => /^#[0-9a-f]{6}$/i.test(value || '') ? value.slice(1).toUpperCase() : '1D1D1F';
       const drawing = el.firstElementChild;
       const bounds = drawing?.getBBox?.(), matrix = drawing?.getScreenCTM?.();
@@ -104,7 +106,7 @@ export function collectEditableSlide(board) {
       } : box;
       if (native) emit(el, { kind: 'nativeShape', ...painted, name, native, shapeKind: kind,
         fill: hex(el.dataset.shapeFill), stroke: hex(el.dataset.shapeStroke),
-        width: Number(el.dataset.shapeWidth) || 0, adjust: Number(el.dataset.shapeAdjust) || 0 });
+        width: Number(el.dataset.shapeWidth) || 0, adjust: Number(el.dataset.shapeAdjust) || 0, radiusScale });
       else emit(el, { kind: 'graphic', ...box, name, index: graphics.indexOf(el) });
       if (['star', 'arrow', 'blockArrow'].includes(kind)) warnings.push(`${name}: PPTX 原生形状的细部参数可能与 HTML 不同`);
     } else if (el.matches('svg,canvas')) {
@@ -216,7 +218,7 @@ export async function addEditableSlide({ pptx, slide, data, page, board, context
         line: { color: item.stroke, width: pt(Math.max(isLine ? 1 : 0, item.width)),
           transparency: item.width ? 0 : 100,
           endArrowType: item.shapeKind === 'arrow' ? 'triangle' : undefined },
-        rectRadius: item.shapeKind === 'rect' ? px(item.adjust * Math.min(item.w / 200, item.h / 120)) : undefined,
+        rectRadius: item.shapeKind === 'rect' ? px(item.adjust * item.radiusScale) : undefined,
       });
     } else if (item.kind === 'shape') {
       slide.addShape(pptx.ShapeType[item.geometry], {

@@ -5,6 +5,8 @@ import { chromium } from 'playwright';
 import JSZip from 'jszip';
 import { browserOptions } from './export.mjs';
 import { createPreviewServer } from './server.mjs';
+import { shapeMarkup } from './src/shapes.js';
+import { collectEditableSlide } from './pptx.mjs';
 
 let browser, editor, server, origin;
 before(async () => {
@@ -72,6 +74,7 @@ test('shape palette inserts eight persistent, individually editable elements; pa
     assert.equal(await shapes.first().getAttribute('data-shape-width'), '2');
     assert.equal(await p.locator('.shape-stroke-color .shape-swatch').evaluate(n => getComputedStyle(n).borderRadius), '50%');
     assert.equal(await p.locator('.shape-stroke-color .shape-swatch').evaluate(n => getComputedStyle(n).borderTopColor), 'rgb(25, 169, 116)');
+    assert.equal(await p.locator('.shape-stroke-color .shape-swatch').evaluate(n => getComputedStyle(n).backgroundColor), 'rgba(0, 0, 0, 0)');
     const saved = await p.locator('[data-artboard=p1]').innerHTML();
     const reopened = await browser.newPage();
     try {
@@ -107,6 +110,7 @@ test('every inserted shape responds to its visible controls', async () => {
       assert.equal(await shape.locator(':scope > *').getAttribute('stroke'), '#ef4444', `${kind} stroke`);
       await p.locator('[data-shape-prop=width]').fill('5');
       assert.equal(await shape.locator(':scope > *').getAttribute('stroke-width'), '5', `${kind} width`);
+      assert.equal(await shape.locator(':scope > *').getAttribute('vector-effect'), null, `${kind} stroke follows canvas zoom`);
       if (kind !== 'line' && kind !== 'arrow') {
         await p.locator('[data-shape-prop=fill]').fill('#22c55e');
         assert.equal(await shape.locator(':scope > *').getAttribute('fill'), '#22c55e', `${kind} fill`);
@@ -120,6 +124,74 @@ test('every inserted shape responds to its visible controls', async () => {
         await p.locator('[data-shape-prop=adjust]').dispatchEvent('change');
       }
     }
+  } finally { await p.close(); }
+});
+
+test('AI shape markup materializes editable parameters and visible geometry', async () => {
+  const markup = shapeMarkup({ id: 'p1-ai-rect', kind: 'rect', fill: '#112233', stroke: '#ee4433', strokeWidth: 6, adjust: 24, width: 300, height: 90 });
+  const p = await browser.newPage();
+  try {
+    await p.setContent(shell(markup));
+    const shape = p.locator('[data-el=p1-ai-rect]');
+    assert.equal(await shape.locator('rect').getAttribute('rx'), '24');
+    assert.equal(await shape.locator('rect').getAttribute('stroke-width'), '6');
+    assert.equal(await shape.locator('rect').getAttribute('vector-effect'), null);
+    assert.equal(await shape.getAttribute('viewBox'), '0 0 300 90');
+    const exported = await p.evaluate(collectEditableSlide, await p.locator('[data-artboard=p1]').elementHandle());
+    const native = exported.items.find(item => item.name === 'p1-ai-rect');
+    assert.ok(Math.abs(native.radiusScale - 1) < .01, `PPTX radius matches HTML pixels: ${native.radiusScale}`);
+    await p.addScriptTag({ content: editor });
+    await p.locator('[data-act=edit]').click();
+    await shape.evaluate(n => {
+      n.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, button: 0 }));
+      n.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }));
+    });
+    assert.equal(await p.locator('[data-shape-prop=fill]').inputValue(), '#112233');
+    assert.equal(await p.locator('[data-shape-prop=stroke]').inputValue(), '#ee4433');
+    assert.equal(await p.locator('[data-shape-prop=width]').inputValue(), '6');
+    assert.equal(await p.locator('[data-shape-prop=adjust]').inputValue(), '24');
+  } finally { await p.close(); }
+});
+
+test('small shapes keep valid geometry with the maximum stroke width', async () => {
+  const p = await browser.newPage();
+  try {
+    await p.setContent(shell(['rect', 'ellipse', 'star'].map((kind, i) =>
+      shapeMarkup({ id: `p1-tiny-${i}`, kind, width: 8, height: 8, strokeWidth: 16 })
+    ).join('')));
+    for (const shape of await p.locator('svg[data-shape]').all()) {
+      const bounds = await shape.locator(':scope > *').evaluate(n => {
+        const { width, height } = n.getBBox(); return { width, height };
+      });
+      assert.ok(bounds.width > 0 && bounds.height > 0, `valid ${await shape.getAttribute('data-shape')} geometry`);
+    }
+  } finally { await p.close(); }
+});
+
+test('resizing a shape keeps its stroke and corner radius while recomputing geometry', async () => {
+  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await p.setContent(shell(shapeMarkup({ id: 'p1-resize', kind: 'rect', strokeWidth: 8, adjust: 18, width: 200, height: 120 })));
+    await p.addScriptTag({ content: editor });
+    await p.locator('[data-act=edit]').click();
+    await p.locator('[data-el=p1-resize]').click();
+    const handle = await p.locator('[data-h=e]').boundingBox();
+    const x = handle.x + handle.width / 2, y = handle.y + handle.height / 2;
+    await p.mouse.move(x, y);
+    await p.mouse.down();
+    await p.mouse.move(x + 100, y, { steps: 5 });
+    await p.mouse.up();
+    const shape = p.locator('[data-el=p1-resize]');
+    const resized = (await shape.getAttribute('viewBox')).split(' ').map(Number);
+    assert.ok(resized[2] > 250 && Math.abs(resized[3] - 120) < .01, `viewBox follows the stretched frame: ${resized}`);
+    assert.equal(await shape.locator('rect').getAttribute('rx'), '18');
+    assert.equal(await shape.locator('rect').getAttribute('stroke-width'), '8');
+    assert.equal(await shape.locator('rect').getAttribute('vector-effect'), null);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await shape.getAttribute('viewBox'), '0 0 200 120');
+    assert.equal(await shape.locator('rect').getAttribute('width'), '192');
+    await p.locator('[data-act=redo]').click();
+    assert.equal(await shape.locator('rect').getAttribute('width'), String(resized[2] - 8));
   } finally { await p.close(); }
 });
 
