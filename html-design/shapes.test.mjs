@@ -49,12 +49,29 @@ test('shape palette inserts eight persistent, individually editable elements; pa
       n.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, button: 0 }));
     });
     const adjust = p.locator('[data-shape-prop=adjust]');
-    await adjust.evaluate(n => { n.value = '32'; n.dispatchEvent(new Event('change', { bubbles: true })); });
+    await adjust.evaluate(n => { n.value = '32'; n.dispatchEvent(new Event('input', { bubbles: true })); });
+    assert.equal(await shapes.first().locator('rect').getAttribute('rx'), '32', 'slider previews before release');
+    await adjust.dispatchEvent('change');
     assert.equal(await shapes.first().getAttribute('data-shape-adjust'), '32');
     await p.locator('[data-act=undo]').click();
     assert.equal(await shapes.first().getAttribute('data-shape-adjust'), '12');
     await p.locator('[data-act=redo]').click();
     assert.equal(await shapes.first().getAttribute('data-shape-adjust'), '32');
+    await p.locator('[data-shape-prop=fill]').fill('#e03131');
+    assert.equal(await shapes.first().locator('rect').getAttribute('fill'), '#e03131');
+    assert.equal(await p.locator('.shape-fill-color .shape-swatch').evaluate(n => getComputedStyle(n).borderRadius), '50%');
+    assert.equal(await p.locator('.shape-fill-color .shape-swatch').evaluate(n => getComputedStyle(n).backgroundColor), 'rgb(224, 49, 49)');
+    await p.locator('[data-shape-prop=width]').fill('0');
+    await p.locator('[data-shape-prop=stroke]').fill('#19a974');
+    assert.equal(await shapes.first().getAttribute('data-shape-width'), '2', 'changing a hidden stroke makes it visible');
+    assert.equal(await shapes.first().locator('rect').getAttribute('stroke'), '#19a974');
+    assert.equal(await p.locator('.shape-number-field').evaluate(n => getComputedStyle(n).backgroundColor), 'rgb(56, 56, 56)');
+    await p.locator('[data-act=shape-width-up]').click();
+    assert.equal(await shapes.first().getAttribute('data-shape-width'), '3');
+    await p.locator('[data-act=shape-width-down]').click();
+    assert.equal(await shapes.first().getAttribute('data-shape-width'), '2');
+    assert.equal(await p.locator('.shape-stroke-color .shape-swatch').evaluate(n => getComputedStyle(n).borderRadius), '50%');
+    assert.equal(await p.locator('.shape-stroke-color .shape-swatch').evaluate(n => getComputedStyle(n).borderTopColor), 'rgb(25, 169, 116)');
     const saved = await p.locator('[data-artboard=p1]').innerHTML();
     const reopened = await browser.newPage();
     try {
@@ -64,6 +81,83 @@ test('shape palette inserts eight persistent, individually editable elements; pa
       assert.equal(await reopened.locator('svg[data-shape=rect] rect').getAttribute('rx'), '32');
     } finally { await reopened.close(); }
     assert.deepEqual(errors, []);
+  } finally { await p.close(); }
+});
+
+test('every inserted shape responds to its visible controls', async () => {
+  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await p.setContent(shell(''));
+    await p.addScriptTag({ content: editor });
+    await p.locator('[data-act=edit]').click();
+    for (const kind of ['rect', 'ellipse', 'triangle', 'diamond', 'star', 'line', 'arrow', 'blockArrow']) {
+      await p.locator('[data-act=add-shape]').click();
+      await p.locator(`[data-shape-kind=${kind}]`).click();
+      const shape = p.locator(`svg[data-shape=${kind}]`);
+      assert.ok(await p.locator('.shape-tools').isVisible(), `${kind} controls visible`);
+      if (kind !== 'line' && kind !== 'arrow') {
+        const gap = await shape.evaluate(n => {
+          const box = n.getBoundingClientRect(), path = n.firstElementChild, b = path.getBBox(), m = path.getScreenCTM();
+          const a = new DOMPoint(b.x, b.y).matrixTransform(m), z = new DOMPoint(b.x + b.width, b.y + b.height).matrixTransform(m);
+          return Math.max(a.x - box.left, a.y - box.top, box.right - z.x, box.bottom - z.y);
+        });
+        assert.ok(gap < 4, `${kind} fills its selection frame (gap ${gap}px)`);
+      }
+      await p.locator('[data-shape-prop=stroke]').fill('#ef4444');
+      assert.equal(await shape.locator(':scope > *').getAttribute('stroke'), '#ef4444', `${kind} stroke`);
+      await p.locator('[data-shape-prop=width]').fill('5');
+      assert.equal(await shape.locator(':scope > *').getAttribute('stroke-width'), '5', `${kind} width`);
+      if (kind !== 'line' && kind !== 'arrow') {
+        await p.locator('[data-shape-prop=fill]').fill('#22c55e');
+        assert.equal(await shape.locator(':scope > *').getAttribute('fill'), '#22c55e', `${kind} fill`);
+      }
+      if (['rect', 'star', 'arrow', 'blockArrow'].includes(kind)) {
+        const before = await shape.innerHTML();
+        await p.locator('[data-shape-prop=adjust]').evaluate(n => {
+          n.value = '42'; n.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+        assert.notEqual(await shape.innerHTML(), before, `${kind} geometry previews`);
+        await p.locator('[data-shape-prop=adjust]').dispatchEvent('change');
+      }
+    }
+  } finally { await p.close(); }
+});
+
+test('undo during an uncommitted slider preview restores the parameter without deleting the shape', async () => {
+  const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await p.setContent(shell(''));
+    await p.addScriptTag({ content: editor });
+    await p.locator('[data-act=edit]').click();
+    await p.locator('[data-act=add-shape]').click();
+    await p.locator('[data-shape-kind=rect]').click();
+    await p.locator('[data-shape-prop=adjust]').evaluate(n => {
+      n.focus(); n.value = '40'; n.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    assert.equal(await p.locator('svg[data-shape=rect] rect').getAttribute('rx'), '40');
+    await p.keyboard.press('ControlOrMeta+z');
+    assert.equal(await p.locator('svg[data-shape=rect]').count(), 1);
+    assert.equal(await p.locator('svg[data-shape=rect] rect').getAttribute('rx'), '12');
+  } finally { await p.close(); }
+});
+
+test('saving during an active slider preview keeps the value and its undo boundary', async () => {
+  const p = await browser.newPage({ acceptDownloads: true });
+  try {
+    await p.setContent(shell(''));
+    await p.addScriptTag({ content: editor });
+    await p.locator('[data-act=edit]').click();
+    await p.locator('[data-act=add-shape]').click();
+    await p.locator('[data-shape-kind=rect]').click();
+    await p.locator('[data-shape-prop=adjust]').evaluate(n => {
+      n.focus(); n.value = '40'; n.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const download = p.waitForEvent('download');
+    await p.keyboard.press('ControlOrMeta+s');
+    assert.match(await readFile(await (await download).path(), 'utf8'), /data-shape-adjust="40"/);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('svg[data-shape=rect]').count(), 1);
+    assert.equal(await p.locator('svg[data-shape=rect] rect').getAttribute('rx'), '12');
   } finally { await p.close(); }
 });
 

@@ -204,6 +204,7 @@ import {
     }
     function history(dir) {
       endText();
+      finishAllShapeParams();
       const from = dir < 0 ? S.undo : S.redo,
         to = dir < 0 ? S.redo : S.undo,
         c = from.pop();
@@ -276,7 +277,7 @@ import {
         markActive();
         syncBar();
       },
-      flush: () => persistence?.flush() || Promise.resolve(),
+      flush: () => { finishAllShapeParams(); return persistence?.flush() || Promise.resolve(); },
       save: () => save(),
       toast,
     });
@@ -307,6 +308,7 @@ import {
     }
     function setEditing(on) {
       if (on && persistence && !persistence.canEdit()) return;
+      if (!on) finishAllShapeParams();
       S.editing = on;
       root.toggleAttribute("data-editing", on);
       host.toggleAttribute("data-editing", on);
@@ -344,6 +346,8 @@ import {
         "add-image",
         "add-shape",
         "shape-insert",
+        "shape-width-up",
+        "shape-width-down",
         "src-apply",
         "image-replace",
         "image-fit",
@@ -822,7 +826,7 @@ import {
       endText();
       const el = makeShape(kind, elementId(b, 'shape'));
       if (!el) return;
-      placeNew(el, b, 220, kind === 'line' || kind === 'arrow' ? 44 : 132);
+      placeNew(el, b, kind === 'star' ? 132 : 220, kind === 'line' ? 8 : kind === 'arrow' ? 44 : 132);
       select(el);
     }
     function addImage(src) {
@@ -1074,6 +1078,8 @@ import {
           if (ui.activeElement !== input) input.value = value;
         }
         $('.shape-color').hidden = !shapeHasFill(el.dataset.shape);
+        $('.shape-fill-color .shape-swatch').style.background = el.dataset.shapeFill;
+        $('.shape-stroke-color .shape-swatch').style.borderColor = el.dataset.shapeStroke;
         $('.shape-adjust').hidden = !shapeHasAdjust(el.dataset.shape);
         $('.shape-adjust').firstChild.textContent = ({ rect: '圆角', star: '尖角', arrow: '箭头', blockArrow: '箭头' })[el.dataset.shape] || '调整';
       }
@@ -1154,7 +1160,8 @@ import {
                 n.matches("input,textarea,[contenteditable=true]"),
             ) &&
           !zoomKey &&
-          !(controlKey && e.key.toLowerCase() === "s")
+          !(controlKey && (e.key.toLowerCase() === "s" ||
+            (['z', 'y'].includes(e.key.toLowerCase()) && e.composedPath().some(n => n instanceof Element && n.hasAttribute('data-shape-prop')))))
         )
           return;
         const typing = !!S.text,
@@ -1566,6 +1573,8 @@ import {
       },
       "add-shape": (btn) => openMenu('shape', btn),
       "shape-insert": (btn) => addShape(btn.dataset.shapeKind),
+      "shape-width-up": () => stepShapeWidth(1),
+      "shape-width-down": () => stepShapeWidth(-1),
       undo: () => history(-1),
       redo: () => history(1),
       "page-add": () => pages.add(),
@@ -1636,6 +1645,8 @@ import {
       "add-text",
       "add-image",
       "shape-insert",
+      "shape-width-up",
+      "shape-width-down",
       "undo",
       "redo",
       "src-apply",
@@ -1671,17 +1682,52 @@ import {
         return;
       ACTS[act]?.(btn);
     });
-    ui.addEventListener('change', (e) => {
-      const prop = e.target.dataset?.shapeProp;
+    const shapePending = new Map();
+    function previewShapeParam(input) {
+      const prop = input.dataset?.shapeProp;
       const el = S.sel;
       if (!prop || !el?.matches('svg[data-shape]') || !S.editing || !persistence?.canEdit()) return;
       const field = { fill: 'shapeFill', stroke: 'shapeStroke', width: 'shapeWidth', adjust: 'shapeAdjust' }[prop];
       if (!field) return;
-      const before = snap([el], true);
-      el.dataset[field] = e.target.value;
+      if (['width', 'adjust'].includes(prop) && !Number.isFinite(input.valueAsNumber)) return;
+      const pending = shapePending.get(input);
+      const fresh = !pending || pending.el !== el;
+      if (fresh) shapePending.set(input, { el, before: snap([el], true) });
+      el.dataset[field] = input.value;
+      if (prop === 'stroke' && Number(el.dataset.shapeWidth) === 0) {
+        el.dataset.shapeWidth = '2';
+        $('[data-shape-prop=width]').value = '2';
+      }
+      if (prop === 'fill') $('.shape-fill-color .shape-swatch').style.background = input.value;
+      if (prop === 'stroke') $('.shape-stroke-color .shape-swatch').style.borderColor = input.value;
       renderShape(el);
-      commit(before, el.closest('[data-artboard]'));
+      if (fresh) persistence?.markDirty();
+    }
+    function finishShapeParam(input) {
+      const pending = shapePending.get(input);
+      if (!pending) return;
+      shapePending.delete(input);
+      if (pending.el.isConnected) commit(pending.before, pending.el.closest('[data-artboard]'));
       drawSel();
+    }
+    function finishAllShapeParams() {
+      for (const input of [...shapePending.keys()]) finishShapeParam(input);
+    }
+    function stepShapeWidth(delta) {
+      if (!S.sel?.matches('svg[data-shape]')) return;
+      const input = $('[data-shape-prop=width]');
+      input.value = String(Math.max(0, Math.min(16, (Number(input.value) || 0) + delta)));
+      previewShapeParam(input);
+      finishShapeParam(input);
+    }
+    ui.addEventListener('input', e => previewShapeParam(e.target));
+    ui.addEventListener('change', e => {
+      if (!e.target.dataset?.shapeProp) return;
+      previewShapeParam(e.target);
+      finishShapeParam(e.target);
+    });
+    ui.addEventListener('focusout', e => {
+      if (e.target.dataset?.shapeProp) finishShapeParam(e.target);
     });
     ui.addEventListener("keydown", (e) => {
       if (!modal.hidden && e.key === "Tab") {
@@ -2026,6 +2072,7 @@ import {
     }
     function save() {
       endText();
+      finishAllShapeParams();
       persistence.save();
     }
     const exportFile = createExporter({
@@ -2072,7 +2119,7 @@ import {
       changed: (value) => {
         S.changed = value;
       },
-      isBusy: () => !!S.drag || sourcePending(),
+      isBusy: () => !!S.drag || shapePending.size > 0 || sourcePending(),
       hasPendingSource: () => sourcePending() || pages.hasPendingRename(),
       pause() {
         if (sourcePending() || pages.hasPendingRename()) return false;
