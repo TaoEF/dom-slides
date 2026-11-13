@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>形状工具验收</title>
+  <style data-design>:root{--paper:#fff;--ink:#1d1d1f;--muted:#81818b}</style>
+  <style>
+    body{margin:0;background:#e9e9ec;font-family:Inter,"PingFang SC",sans-serif;color:var(--ink)}
+    [data-stage]{display:flex;justify-content:center;padding:40px}
+    [data-artboard]{box-sizing:border-box;width:1280px;height:720px;overflow:hidden;background:var(--paper);padding:72px 88px}
+    h1{font-size:52px;letter-spacing:-.04em;margin:0 0 16px}
+    p{font-size:18px;color:var(--muted);margin:0;max-width:740px}
+    .workspace{height:180px;margin-top:32px;border:1px dashed #d9d9de;border-radius:20px;display:flex;align-items:center;justify-content:center;color:#a0a0a9;font-size:20px}
+  </style>
+</head>
+<body>
+<main data-stage><section data-artboard="p1" data-title="形状工具验收" data-mode="flow">
+  <h1 data-el="p1-title">Shapes, simply.</h1>
+  <p data-el="p1-intro">点击“编辑”，再用顶部形状按钮插入图形。选中图形可调整颜色、线宽与部分几何参数。</p>
+  <div data-el="p1-workspace" class="workspace"><span data-el="p1-placeholder">在这里试试图形</span></div>
+</section></main>
+<script data-editor src="../html-design/editor.js"></script>
+</body>
+</html>

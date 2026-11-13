@@ -275,7 +275,7 @@ property of their respective owners.
  */
 (() => {
   // html-design/src/editor.css
-  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-main:hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.thumb-main:focus-visible .frame {\n  outline: 2px solid var(--selection);\n  outline-offset: 3px;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.tbar .fs {\n  width: 52px;\n  height: 29px;\n  background: #383838;\n  border: 0;\n  border-radius: 5px;\n  padding: 0 4px;\n  text-align: center;\n  font-variant-numeric: tabular-nums;\n  appearance: textfield;\n}\n.fs::-webkit-inner-spin-button {\n  appearance: none;\n}\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; }\n.color-control:hover { background:var(--hover); }\n.color-control input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }\n.color-control .color-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap: 0; width: 36px; }\n.add-text .icon:first-child { width: 12px; height: 12px; }\n.add-text .icon:last-child { width: 17px; height: 17px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-scope { color:var(--muted); font-size:12px; padding:0 8px; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n';
+  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-main:hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.thumb-main:focus-visible .frame {\n  outline: 2px solid var(--selection);\n  outline-offset: 3px;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch, .tbar .color-control .shape-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.tbar .fs {\n  width: 52px;\n  height: 29px;\n  background: #383838;\n  border: 0;\n  border-radius: 5px;\n  padding: 0 4px;\n  text-align: center;\n  font-variant-numeric: tabular-nums;\n  appearance: textfield;\n}\n.fs::-webkit-inner-spin-button {\n  appearance: none;\n}\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; }\n.color-control:hover { background:var(--hover); }\n.color-control input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }\n.color-control .color-swatch, .color-control .shape-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap: 0; width: 36px; }\n.add-text .icon:first-child { width: 12px; height: 12px; }\n.add-text .icon:last-child { width: 17px; height: 17px; }\n.add-shape { gap: 0; width: 36px; }\n.add-shape .icon:first-child { width: 17px; height: 17px; }\n.add-shape .icon:last-child { width: 10px; height: 10px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.shape-palette { display: grid; grid-template-columns: repeat(4, 42px); gap: 4px; min-width: 0; padding: 8px; }\n.shape-palette[hidden] { display: none; }\n.shape-palette button { width: 42px; height: 42px; padding: 9px; justify-content: center; }\n.shape-palette svg { width: 24px; height: 24px; }\n.shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }\n.shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }\n.shape-stroke-color .shape-swatch { background: #fff; border: 3px solid currentColor; }\n.shape-width-control { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }\n.shape-number-field { display: inline-flex; align-items: center; height: 29px; width: 52px; border-radius: 5px; background: #383838; }\n.shape-number-field input { width: 35px; min-width: 0; height: 27px; border: 0; padding: 0 2px; outline: 0; background: transparent; color: #fff; text-align: center; appearance: textfield; font-variant-numeric: tabular-nums; }\n.shape-number-field input::-webkit-inner-spin-button { appearance: none; }\n.shape-steps { display: flex; flex-direction: column; width: 15px; height: 27px; }\n.shape-steps button { width: 15px; min-width: 15px; height: 13px; min-height: 13px; padding: 0; border-radius: 2px; color: #c9c9cc; }\n.shape-steps button .icon { width: 10px; height: 10px; }\n.shape-adjust input { width: 82px; accent-color: #c9c9cc; }\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n    gap: 2px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .tools { gap: 0; }\n  .head .layout-toggle { margin-inline: 0; }\n  .head .layout-toggle button { padding-inline: 3px; font-size: 10px; }\n  .head .tools > [data-act="add-text"],\n  .head .tools > [data-act="add-image"],\n  .head .tools > [data-act="add-shape"] { width: 27px; min-width: 27px; padding: 0; }\n  .head .add-shape .icon:last-child { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-scope { color:var(--muted); font-size:12px; padding:0 8px; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n';
 
   // node_modules/lucide/dist/esm/icons/arrow-down.mjs
   var ArrowDown = [
@@ -318,6 +318,9 @@ property of their respective owners.
 
   // node_modules/lucide/dist/esm/icons/chevron-right.mjs
   var ChevronRight = [["path", { d: "m9 18 6-6-6-6" }]];
+
+  // node_modules/lucide/dist/esm/icons/chevron-up.mjs
+  var ChevronUp = [["path", { d: "m18 15-6-6-6 6" }]];
 
   // node_modules/lucide/dist/esm/icons/circle-alert.mjs
   var CircleAlert = [
@@ -521,6 +524,9 @@ property of their respective owners.
     ["path", { d: "M14 7h1a2 2 0 0 1 2 2v1" }]
   ];
 
+  // node_modules/lucide/dist/esm/icons/square.mjs
+  var Square = [["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }]];
+
   // node_modules/lucide/dist/esm/icons/strikethrough.mjs
   var Strikethrough = [
     ["path", { d: "M16 4H9a3 3 0 0 0-2.83 4" }],
@@ -607,6 +613,7 @@ property of their respective owners.
     Pencil,
     Type,
     ImagePlus,
+    Square,
     PanelLeft,
     PanelsTopBottom: Rows3,
     Play,
@@ -615,6 +622,7 @@ property of their respective owners.
     ChevronLeft,
     ChevronRight,
     ChevronDown,
+    ChevronUp,
     Plus,
     Minus,
     Ellipsis,
@@ -994,6 +1002,20 @@ property of their respective owners.
   }
 
   // html-design/src/ui.js
+  var shapeIcons = {
+    rect: '<rect x="3" y="5" width="18" height="14" rx="2"/>',
+    ellipse: '<ellipse cx="12" cy="12" rx="9" ry="7"/>',
+    triangle: '<path d="M12 3 22 20H2Z"/>',
+    diamond: '<path d="M12 2 22 12 12 22 2 12Z"/>',
+    star: '<path d="m12 2 2.9 6.6 7.1.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7L2 9.3l7.1-.7Z"/>',
+    line: '<path d="M2 12h20" fill="none"/>',
+    arrow: '<path d="M2 12h20m-7-7 7 7-7 7" fill="none"/>',
+    blockArrow: '<path d="M2 8h12V3l8 9-8 9v-5H2Z"/>'
+  };
+  var shapeLabels = { rect: "矩形", ellipse: "椭圆", triangle: "三角形", diamond: "菱形", star: "星形", line: "直线", arrow: "线箭头", blockArrow: "块箭头" };
+  var shapePalette = Object.entries(shapeIcons).map(
+    ([kind, drawing]) => `<button type="button" data-act="shape-insert" data-shape-kind="${kind}" title="${shapeLabels[kind]}" aria-label="${shapeLabels[kind]}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${drawing}</svg></button>`
+  ).join("");
   function toolbarHTML({ HANDLES }) {
     const fmt = (cmd, name, label) => `<button type="button" data-fmt="${cmd}" title="${label}" aria-label="${label}" class="icon-only">${icon(name)}</button>`;
     return `<style>${editor_default}</style>
@@ -1002,7 +1024,7 @@ property of their respective owners.
       <button class="save-state" data-act="status" title="保存状态"><span class="state-icon">${icon("Check")}</span><span class="state-text">正在连接</span></button></div>
     <div class="grp tools" hidden>${button("undo", "Undo2", "撤销 (Ctrl/⌘ Z)", { cls: "icon-only" })}${button("redo", "Redo2", "重做 (Ctrl/⌘ Shift Z)", { cls: "icon-only" })}
       <div class="seg layout-toggle" role="group" aria-label="编辑模式"><button type="button" data-act="flow" title="自动排版：保留页面原有布局" aria-pressed="true">自动排版</button><button type="button" data-act="artboard" title="手动：自由调整当前页位置" aria-pressed="false">手动</button></div>
-      <button type="button" data-act="add-text" class="icon-only add-text" title="添加文字" aria-label="添加文字">${icon("Plus")}${icon("Type")}</button>${button("add-image", "ImagePlus", "添加图片", { cls: "icon-only" })}</div>
+      <button type="button" data-act="add-text" class="icon-only add-text" title="添加文字" aria-label="添加文字">${icon("Plus")}${icon("Type")}</button>${button("add-image", "ImagePlus", "添加图片", { cls: "icon-only" })}<button type="button" data-act="add-shape" class="icon-only add-shape" title="添加形状" aria-label="添加形状" aria-expanded="false" aria-haspopup="menu">${icon("Square")}${icon("ChevronDown")}</button></div>
     <div class="grp actions">
       ${button("edit", "Pencil", "编辑画布", { text: "编辑", cls: "edit-button", attrs: 'aria-pressed="false"' })}${button("done", "Check", "完成编辑，返回画布预览", { text: "完成", cls: "done-button", attrs: "hidden" })}
       <button data-act="preview" class="preview-button" title="播放" aria-label="播放" aria-expanded="false" aria-haspopup="menu">${icon("Play")}<span>播放</span>${icon("ChevronDown")}</button>
@@ -1018,11 +1040,13 @@ property of their respective owners.
       <label class="color-control" title="文字颜色" aria-label="文字颜色"><span class="color-swatch"></span><input type="color" class="cpick" aria-label="文字颜色"></label>
       ${button("text-align", "AlignLeft", "左对齐；点击切换为居中", { cls: "icon-only text-align" })}</div>
     <div class="image-tools" hidden>${button("image-replace", "RefreshCw", "替换图片", { text: "替换" })}<div class="seg" role="group" aria-label="图片填充模式"><button data-act="image-fit" title="完整显示，保持比例">适应</button><button data-act="image-cover" title="裁切铺满，保持比例">填充</button></div></div>
+    <div class="shape-tools" hidden><label class="color-control shape-color shape-fill-color" title="填充色"><span class="shape-swatch"></span><input type="color" data-shape-prop="fill" aria-label="填充色"></label><label class="color-control shape-color shape-stroke-color" title="描边色"><span class="shape-swatch"></span><input type="color" data-shape-prop="stroke" aria-label="描边色"></label><div class="shape-width-control" role="group" aria-label="线宽"><span>线宽</span><div class="shape-number-field"><input type="number" min="0" max="16" step="1" data-shape-prop="width" aria-label="线宽"><div class="shape-steps"><button type="button" data-act="shape-width-up" title="增加线宽" aria-label="增加线宽">${icon("ChevronUp")}</button><button type="button" data-act="shape-width-down" title="减小线宽" aria-label="减小线宽">${icon("ChevronDown")}</button></div></div></div><label class="shape-number shape-adjust">调整<input type="range" min="0" max="50" step="1" data-shape-prop="adjust"></label></div>
     <div class="object-tools">${button("element-more", "Ellipsis", "元素操作", { cls: "icon-only", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}</div>
   </div>
   <div class="sel">${HANDLES.map((h) => `<i data-h="${h}" title="${h.length === 2 ? "拖动缩放（文字角点同步缩放字号）" : "调整边界，不改变字号"}"></i>`).join("")}</div>
   <div class="menu-panel text-layout-panel" data-menu="text-layout" role="menu" hidden><strong>文字适配</strong><p class="text-layout-status" role="status" aria-live="polite"></p>${button("text-height", "TextCursorInput", "保持字号，按内容调整文本框高度", { text: "高度随内容" })}${button("text-fit", "Type", "保持文本框，缩小字号以完整显示（最小 6px）", { text: "缩小字号适配" })}</div>
   <div class="menu-panel" data-menu="play" role="menu" hidden>${button("scroll-play", "PanelsTopBottom", "滚动播放：上下滚动浏览全部页面", { text: "滚动播放" })}${button("fullscreen", "Maximize", "全屏播放", { text: "全屏播放" })}</div>
+  <div class="menu-panel shape-palette" data-menu="shape" role="menu" aria-label="选择形状" hidden>${shapePalette}</div>
   <div class="menu-panel pop" data-menu="export" role="menu" hidden>
     ${button("pdf", "FileText", "下载 PDF", { text: "PDF 文档" })}${button("pptx", "Presentation", "下载 PPTX（文字和图片可编辑）", { text: "PowerPoint · 可编辑" })}<div class="menu-separator"></div>
     ${button("download", "Download", "下载 HTML", { text: "下载 HTML" })}${button("copy", "Copy", "复制 HTML", { text: "复制 HTML" })}${button("print", "Printer", "浏览器打印 / PDF", { text: "打印" })}
@@ -1563,7 +1587,7 @@ property of their respective owners.
     toast
   }) {
     let pan = { x: 0, y: 0 }, space = false, panning, restore, playTimer;
-    const clamp = (z) => Math.max(0.1, Math.min(4, Math.round(z * 1e3) / 1e3));
+    const clamp2 = (z) => Math.max(0.1, Math.min(4, Math.round(z * 1e3) / 1e3));
     function bounds() {
       if (S.playing) return { x: 0, y: 0, w: innerWidth, h: innerHeight };
       const nav = root.hasAttribute("data-editor-nav") ? parseFloat(getComputedStyle(ui.host).getPropertyValue("--nav")) || 0 : 0;
@@ -1590,7 +1614,7 @@ property of their respective owners.
       draw();
     }
     function zoom(value, at = null) {
-      const old = S.zoom, z = clamp(value), v = bounds();
+      const old = S.zoom, z = clamp2(value), v = bounds();
       if (at) {
         const cx = v.x + v.w / 2, cy = v.y + v.h / 2, k = z / old;
         pan = {
@@ -1621,7 +1645,7 @@ property of their respective owners.
         0.1,
         Math.min((v.w - padding) / b.w, (v.h - padding) / b.h, 4)
       );
-      S.zoom = clamp(z);
+      S.zoom = clamp2(z);
       drawViewport();
     }
     function step(dir) {
@@ -6476,6 +6500,73 @@ property of their respective owners.
     };
   }
 
+  // html-design/src/shapes.js
+  var NS = "http://www.w3.org/2000/svg";
+  var SHAPE_NAMES = {
+    rect: "矩形",
+    ellipse: "椭圆",
+    triangle: "三角形",
+    diamond: "菱形",
+    star: "星形",
+    line: "直线",
+    arrow: "线箭头",
+    blockArrow: "块箭头"
+  };
+  var clamp = (n, min, max) => Math.min(max, Math.max(min, Number(n) || 0));
+  var color = (value, fallback) => /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : fallback;
+  var starPoints = (inner, inset) => {
+    const points = Array.from({ length: 10 }, (_, i) => {
+      const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? inner : 50;
+      return [Math.cos(a) * r, Math.sin(a) * r];
+    });
+    const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    return points.map(([x, y]) => `${inset + (x - minX) * (200 - 2 * inset) / (maxX - minX)},${inset + (y - minY) * (120 - 2 * inset) / (maxY - minY)}`).join(" ");
+  };
+  function renderShape(el) {
+    const kind = el.dataset.shape;
+    el.setAttribute("viewBox", kind === "line" ? "0 0 200 8" : kind === "arrow" ? "0 0 200 40" : "0 0 200 120");
+    el.setAttribute("preserveAspectRatio", "none");
+    const fill = color(el.dataset.shapeFill, "#86868b");
+    const stroke = color(el.dataset.shapeStroke, "#86868b");
+    const sw = clamp(el.dataset.shapeWidth ?? 3, 0, 16);
+    const adjust = clamp(el.dataset.shapeAdjust ?? 20, 0, 50);
+    const edge = sw / 2;
+    const outline = `stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"`;
+    const filled = `fill="${fill}" ${outline}`;
+    const lineStyle = `fill="none" stroke="${stroke}" stroke-width="${Math.max(1, sw)}" stroke-linecap="round" stroke-linejoin="round"`;
+    const geometry = {
+      rect: `<rect x="${edge}" y="${edge}" width="${200 - sw}" height="${120 - sw}" rx="${adjust}" ${filled}/>`,
+      ellipse: `<ellipse cx="100" cy="60" rx="${100 - edge}" ry="${60 - edge}" ${filled}/>`,
+      triangle: `<polygon points="100,${edge} ${200 - edge},${120 - edge} ${edge},${120 - edge}" ${filled}/>`,
+      diamond: `<polygon points="100,${edge} ${200 - edge},60 100,${120 - edge} ${edge},60" ${filled}/>`,
+      star: `<polygon points="${starPoints(12 + adjust * 0.52, edge)}" ${filled}/>`,
+      line: `<path d="M0 4H200" ${lineStyle}/>`,
+      arrow: `<path d="M0 20H200 M${190 - adjust} 0L200 20L${190 - adjust} 40" ${lineStyle}/>`,
+      blockArrow: `<polygon points="${edge},${30 - adjust * 0.2} ${125 - adjust * 0.5},${30 - adjust * 0.2} ${125 - adjust * 0.5},${edge} ${200 - edge},60 ${125 - adjust * 0.5},${120 - edge} ${125 - adjust * 0.5},${90 + adjust * 0.2} ${edge},${90 + adjust * 0.2}" ${filled}/>`
+    };
+    el.innerHTML = geometry[kind] || "";
+  }
+  function makeShape(kind, id) {
+    if (!SHAPE_NAMES[kind]) return null;
+    const el = document.createElementNS(NS, "svg");
+    el.setAttribute("data-el", id);
+    el.setAttribute("data-shape", kind);
+    el.setAttribute("aria-label", SHAPE_NAMES[kind]);
+    el.dataset.shapeFill = "#86868b";
+    el.dataset.shapeStroke = "#86868b";
+    el.dataset.shapeWidth = kind === "line" || kind === "arrow" ? "4" : "2";
+    el.dataset.shapeAdjust = kind === "rect" ? "12" : "20";
+    el.style.width = kind === "star" ? "132px" : "220px";
+    el.style.height = kind === "line" ? "8px" : kind === "arrow" ? "44px" : "132px";
+    el.style.display = "block";
+    el.style.overflow = "visible";
+    renderShape(el);
+    return el;
+  }
+  var shapeHasFill = (kind) => kind !== "line" && kind !== "arrow";
+  var shapeHasAdjust = (kind) => ["rect", "star", "arrow", "blockArrow"].includes(kind);
+
   // html-design/src/guides.js
   var anchors = (r, axis) => axis === "x" ? [r.x, r.x + r.w / 2, r.x + r.w] : [r.y, r.y + r.h / 2, r.y + r.h];
   function snapMove(rect, targets, delta, threshold) {
@@ -6871,6 +6962,7 @@ property of their respective owners.
       }
       function history(dir) {
         endText();
+        finishAllShapeParams();
         const from = dir < 0 ? S.undo : S.redo, to = dir < 0 ? S.redo : S.undo, c = from.pop();
         if (!c) return;
         if (c.board?.isConnected && c.board !== S.current) goTo(c.board);
@@ -6932,7 +7024,10 @@ property of their respective owners.
           markActive();
           syncBar();
         },
-        flush: () => persistence?.flush() || Promise.resolve(),
+        flush: () => {
+          finishAllShapeParams();
+          return persistence?.flush() || Promise.resolve();
+        },
         save: () => save(),
         toast
       });
@@ -6961,6 +7056,7 @@ property of their respective owners.
       }
       function setEditing(on) {
         if (on && persistence && !persistence.canEdit()) return;
+        if (!on) finishAllShapeParams();
         S.editing = on;
         root.toggleAttribute("data-editing", on);
         host.toggleAttribute("data-editing", on);
@@ -6990,6 +7086,10 @@ property of their respective owners.
           "artboard",
           "add-text",
           "add-image",
+          "add-shape",
+          "shape-insert",
+          "shape-width-up",
+          "shape-width-down",
           "src-apply",
           "image-replace",
           "image-fit",
@@ -7385,6 +7485,15 @@ property of their respective owners.
         s.removeAllRanges();
         s.addRange(r);
       }
+      function addShape(kind) {
+        const b = activeBoard();
+        if (!b || !visible(b) || !persistence?.canEdit()) return;
+        endText();
+        const el = makeShape(kind, elementId(b, "shape"));
+        if (!el) return;
+        placeNew(el, b, kind === "star" ? 132 : 220, kind === "line" ? 8 : kind === "arrow" ? 44 : 132);
+        select(el);
+      }
       function addImage(src) {
         const b = activeBoard();
         if (!b || !visible(b) || !persistence?.canEdit()) return;
@@ -7576,9 +7685,9 @@ property of their respective owners.
         alignButton.innerHTML = icon(["AlignLeft", "AlignCenter", "AlignRight", "AlignJustify"][index]);
         alignButton.title = `${labels[index]}；点击切换为${labels[(index + 1) % 4]}`;
         alignButton.setAttribute("aria-label", `文字对齐：${alignButton.title}`);
-        const color = getComputedStyle(el.contains(at) ? at : el).color;
-        $(".color-swatch").style.background = color;
-        const rgb = color.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
+        const color2 = getComputedStyle(el.contains(at) ? at : el).color;
+        $(".color-swatch").style.background = color2;
+        const rgb = color2.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
         if (rgb && ui.activeElement !== $(".cpick")) $(".cpick").value = "#" + rgb.slice(1).map((n2) => Number(n2).toString(16).padStart(2, "0")).join("");
       }
       function placeTbar() {
@@ -7596,6 +7705,19 @@ property of their respective owners.
         $(".text-tools").hidden = !text;
         $(".more-text-section").hidden = !text;
         $(".image-tools").hidden = !image;
+        const shape = !multi && el.matches("svg[data-shape]");
+        $(".shape-tools").hidden = !shape;
+        if (shape) {
+          for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust })) {
+            const input = $(`[data-shape-prop=${prop}]`);
+            if (ui.activeElement !== input) input.value = value;
+          }
+          $(".shape-color").hidden = !shapeHasFill(el.dataset.shape);
+          $(".shape-fill-color .shape-swatch").style.background = el.dataset.shapeFill;
+          $(".shape-stroke-color .shape-swatch").style.borderColor = el.dataset.shapeStroke;
+          $(".shape-adjust").hidden = !shapeHasAdjust(el.dataset.shape);
+          $(".shape-adjust").firstChild.textContent = { rect: "圆角", star: "尖角", arrow: "箭头", blockArrow: "箭头" }[el.dataset.shape] || "调整";
+        }
         if (image) {
           const fit = getComputedStyle(el).objectFit;
           $("[data-act=image-fit]").setAttribute(
@@ -7651,7 +7773,7 @@ property of their respective owners.
           const controlKey = e.ctrlKey || e.metaKey, zoomKey = controlKey && ["=", "+", "-", "_", "0", "1"].includes(e.key);
           if (fromUI(e) && e.composedPath().some(
             (n) => n instanceof Element && n.matches("input,textarea,[contenteditable=true]")
-          ) && !zoomKey && !(controlKey && e.key.toLowerCase() === "s"))
+          ) && !zoomKey && !(controlKey && (e.key.toLowerCase() === "s" || ["z", "y"].includes(e.key.toLowerCase()) && e.composedPath().some((n) => n instanceof Element && n.hasAttribute("data-shape-prop")))))
             return;
           const typing = !!S.text, mod = e.metaKey || e.ctrlKey, k = (e.key || "").toLowerCase(), c = e.code, el = S.sel;
           if (!S.editing && !fromUI(e) && !(mod && (zoomKey || k === "s")) && !(k === "escape" && (!modal.hidden || ui.querySelector("[data-menu]:not([hidden])"))))
@@ -8014,6 +8136,10 @@ property of their respective owners.
           S.replace = null;
           fileIn.click();
         },
+        "add-shape": (btn) => openMenu("shape", btn),
+        "shape-insert": (btn) => addShape(btn.dataset.shapeKind),
+        "shape-width-up": () => stepShapeWidth(1),
+        "shape-width-down": () => stepShapeWidth(-1),
         undo: () => history(-1),
         redo: () => history(1),
         "page-add": () => pages.add(),
@@ -8082,6 +8208,9 @@ property of their respective owners.
         "artboard",
         "add-text",
         "add-image",
+        "shape-insert",
+        "shape-width-up",
+        "shape-width-down",
         "undo",
         "redo",
         "src-apply",
@@ -8106,11 +8235,58 @@ property of their respective owners.
         }
         const act = btn.dataset.act;
         if (!act) return;
-        if (!["preview", "export", "more", "status", "element-more", "text-layout"].includes(act))
+        if (!["preview", "export", "more", "status", "element-more", "text-layout", "add-shape"].includes(act))
           closeMenus();
         if (mutations.has(act) && (!persistence?.canEdit() || !S.editing || S.playing))
           return;
         ACTS[act]?.(btn);
+      });
+      const shapePending = /* @__PURE__ */ new Map();
+      function previewShapeParam(input) {
+        const prop = input.dataset?.shapeProp;
+        const el = S.sel;
+        if (!prop || !el?.matches("svg[data-shape]") || !S.editing || !persistence?.canEdit()) return;
+        const field = { fill: "shapeFill", stroke: "shapeStroke", width: "shapeWidth", adjust: "shapeAdjust" }[prop];
+        if (!field) return;
+        if (["width", "adjust"].includes(prop) && !Number.isFinite(input.valueAsNumber)) return;
+        const pending = shapePending.get(input);
+        const fresh = !pending || pending.el !== el;
+        if (fresh) shapePending.set(input, { el, before: snap([el], true) });
+        el.dataset[field] = input.value;
+        if (prop === "stroke" && Number(el.dataset.shapeWidth) === 0) {
+          el.dataset.shapeWidth = "2";
+          $("[data-shape-prop=width]").value = "2";
+        }
+        if (prop === "fill") $(".shape-fill-color .shape-swatch").style.background = input.value;
+        if (prop === "stroke") $(".shape-stroke-color .shape-swatch").style.borderColor = input.value;
+        renderShape(el);
+        if (fresh) persistence?.markDirty();
+      }
+      function finishShapeParam(input) {
+        const pending = shapePending.get(input);
+        if (!pending) return;
+        shapePending.delete(input);
+        if (pending.el.isConnected) commit(pending.before, pending.el.closest("[data-artboard]"));
+        drawSel();
+      }
+      function finishAllShapeParams() {
+        for (const input of [...shapePending.keys()]) finishShapeParam(input);
+      }
+      function stepShapeWidth(delta) {
+        if (!S.sel?.matches("svg[data-shape]")) return;
+        const input = $("[data-shape-prop=width]");
+        input.value = String(Math.max(0, Math.min(16, (Number(input.value) || 0) + delta)));
+        previewShapeParam(input);
+        finishShapeParam(input);
+      }
+      ui.addEventListener("input", (e) => previewShapeParam(e.target));
+      ui.addEventListener("change", (e) => {
+        if (!e.target.dataset?.shapeProp) return;
+        previewShapeParam(e.target);
+        finishShapeParam(e.target);
+      });
+      ui.addEventListener("focusout", (e) => {
+        if (e.target.dataset?.shapeProp) finishShapeParam(e.target);
       });
       ui.addEventListener("keydown", (e) => {
         if (!modal.hidden && e.key === "Tab") {
@@ -8407,6 +8583,7 @@ property of their respective owners.
       }
       function save() {
         endText();
+        finishAllShapeParams();
         persistence.save();
       }
       const exportFile = createExporter({
@@ -8453,7 +8630,7 @@ property of their respective owners.
         changed: (value) => {
           S.changed = value;
         },
-        isBusy: () => !!S.drag || sourcePending(),
+        isBusy: () => !!S.drag || shapePending.size > 0 || sourcePending(),
         hasPendingSource: () => sourcePending() || pages.hasPendingRename(),
         pause() {
           if (sourcePending() || pages.hasPendingRename()) return false;
