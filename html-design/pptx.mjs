@@ -13,7 +13,7 @@ export function collectEditableSlide(board) {
   };
   const rect = el => {
     const r = el.getBoundingClientRect(), g = globalThis.__htmlDesignGeometry(el);
-    if (g.supported && !el.matches('svg,canvas')) {
+    if (g.supported && (!el.matches('svg,canvas') || el.matches('svg[data-shape]'))) {
       const w = g.w * g.scale, h = g.h * g.scale;
       return { x: g.cx - origin.left - w / 2, y: g.cy - origin.top - h / 2, w, h, rotation: (g.angle + 360) % 360, scale: g.scale, supported: true };
     }

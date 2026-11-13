@@ -172,6 +172,19 @@ test('small shapes keep valid geometry with the maximum stroke width', async () 
   } finally { await p.close(); }
 });
 
+test('PPTX keeps a rotated shape at its local size and angle', async () => {
+  const p = await browser.newPage();
+  try {
+    await p.setContent(shell(shapeMarkup({ id: 'p1-rotated', kind: 'rect', width: 200, height: 100 }) ));
+    await p.locator('[data-el=p1-rotated]').evaluate(n => { n.style.rotate = '45deg'; });
+    await p.addScriptTag({ content: `globalThis.__htmlDesignGeometry = ${elementGeometry.toString()};` });
+    const exported = await p.evaluate(collectEditableSlide, await p.locator('[data-artboard=p1]').elementHandle());
+    const native = exported.items.find(item => item.name === 'p1-rotated');
+    assert.ok(Math.abs(native.w - 200) < 1 && Math.abs(native.h - 100) < 1, `local size: ${native.w}×${native.h}`);
+    assert.ok(Math.abs(native.rotation - 45) < .01, `angle: ${native.rotation}`);
+  } finally { await p.close(); }
+});
+
 test('resizing a shape keeps its stroke and corner radius while recomputing geometry', async () => {
   const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   try {
