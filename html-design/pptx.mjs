@@ -151,6 +151,17 @@ export function collectEditableSlide(board) {
       emit(img, { kind:'image', x:cx-w*box.scale/2, y:cy-h*box.scale/2, w:w*box.scale, h:h*box.scale, rotation:box.rotation, name, source:img.currentSrc||img.src, naturalWidth:img.naturalWidth,naturalHeight:img.naturalHeight, fit:crop?'crop':fit, crop, mask:geometry && radius>0 ? Math.min(.5,radius/Math.min(w,h)) : 0, maskGeometry:geometry?.type === 'ellipse' ? 'ellipse' : 'roundRect', opacity:Number(cs.opacity), href:img.closest('a')?.href });
     } else if (el.matches('img')) {
       emit(el, { kind: 'image', ...box, name, source: el.currentSrc || el.src, naturalWidth: el.naturalWidth, naturalHeight: el.naturalHeight, fit: cs.objectFit, opacity: Number(cs.opacity), href: el.closest('a')?.href });
+    } else if (el.matches('svg[data-shape]')) {
+      const kind = el.dataset.shape;
+      const native = { rect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', diamond: 'diamond', star: 'star5', line: 'line', arrow: 'line', blockArrow: 'rightArrow' }[kind];
+      const view = el.viewBox.baseVal;
+      const radiusScale = view.width && view.height ? Math.min(box.w / view.width, box.h / view.height) : 1;
+      const hex = value => /^#[0-9a-f]{6}$/i.test(value || '') ? value.slice(1).toUpperCase() : '1D1D1F';
+      if (native) emit(el, { kind: 'nativeShape', ...box, name, native, shapeKind: kind,
+        fill: hex(el.dataset.shapeFill), stroke: hex(el.dataset.shapeStroke),
+        width: Number(el.dataset.shapeWidth) || 0, adjust: Number(el.dataset.shapeAdjust) || 0, radiusScale });
+      else emit(el, { kind: 'graphic', ...box, name, index: graphics.indexOf(el) });
+      if (['star', 'arrow', 'blockArrow'].includes(kind)) warnings.push(`${name}: PPTX 原生形状的细部参数可能与 HTML 不同`);
     } else if (el.matches('svg,canvas')) {
       emit(el, { kind: 'graphic', ...box, name, index: graphics.indexOf(el) });
     } else if (el.hasAttribute('data-el') && !el.querySelector('[data-el]') && el.textContent.trim()) {
@@ -258,7 +269,19 @@ export async function addEditableSlide({ pptx, slide, data, page, board, context
   slide.background = { color: data.background.transparency === 100 ? 'FFFFFF' : data.background.color };
   for (const item of data.items) {
     const position = { x: px(item.x), y: px(item.y), w: px(item.w), h: px(item.h), rotate: item.rotation || 0, objectName: item.name };
-    if (item.kind === 'shape') {
+    if (item.kind === 'nativeShape') {
+      const isLine = item.native === 'line';
+      slide.addShape(pptx.ShapeType[item.native], {
+        ...position,
+        y: isLine ? px(item.y + item.h / 2) : position.y,
+        h: isLine ? 0 : position.h,
+        fill: isLine ? { color: 'FFFFFF', transparency: 100 } : { color: item.fill },
+        line: { color: item.stroke, width: pt(Math.max(isLine ? 1 : 0, item.width)),
+          transparency: item.width ? 0 : 100,
+          endArrowType: item.shapeKind === 'arrow' ? 'triangle' : undefined },
+        rectRadius: item.shapeKind === 'rect' ? px(item.adjust * item.radiusScale) : undefined,
+      });
+    } else if (item.kind === 'shape') {
       slide.addShape(pptx.ShapeType[item.geometry], {
         ...position, fill: { color: item.fill.color, transparency: 100 - (100 - item.fill.transparency) * item.opacity },
         line: item.stroke ? { color: item.stroke.color.color,

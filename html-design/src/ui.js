@@ -2,6 +2,20 @@ import { shortcutLabels } from "./shortcuts.js";
 import styles from "./editor.css";
 import { icon, button as b } from "./icons.js";
 import { reviewHTML } from './review.js';
+const shapeIcons = {
+  rect: '<rect x="3" y="5" width="18" height="14" rx="2"/>',
+  ellipse: '<ellipse cx="12" cy="12" rx="9" ry="7"/>',
+  triangle: '<path d="M12 3 22 20H2Z"/>',
+  diamond: '<path d="M12 2 22 12 12 22 2 12Z"/>',
+  star: '<path d="m12 2 2.9 6.6 7.1.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7L2 9.3l7.1-.7Z"/>',
+  line: '<path d="M2 12h20" fill="none"/>',
+  arrow: '<path d="M2 12h20m-7-7 7 7-7 7" fill="none"/>',
+  blockArrow: '<path d="M2 8h12V3l8 9-8 9v-5H2Z"/>',
+};
+const shapeLabels = { rect: '矩形', ellipse: '椭圆', triangle: '三角形', diamond: '菱形', star: '星形', line: '直线', arrow: '线箭头', blockArrow: '块箭头' };
+const shapePalette = Object.entries(shapeIcons).map(([kind, drawing]) =>
+  `<button type="button" data-act="shape-insert" data-shape-kind="${kind}" title="${shapeLabels[kind]}" aria-label="${shapeLabels[kind]}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${drawing}</svg></button>`
+).join('');
 export function toolbarHTML({ HANDLES, WORKSPACE = false }) {
   const keys = shortcutLabels(navigator.platform);
   const fmt = (cmd, name, label) =>
@@ -12,7 +26,7 @@ export function toolbarHTML({ HANDLES, WORKSPACE = false }) {
       <button class="save-state" data-act="status" title="保存状态"><span class="state-icon">${icon("Check")}</span><span class="state-text">正在连接</span></button></div>
     <div class="grp tools" hidden>${b("undo", "Undo2", `撤销 (${keys.undo})`, { cls: "icon-only" })}${b("redo", "Redo2", `重做 (${keys.redo})`, { cls: "icon-only" })}
       <div class="seg layout-toggle" role="group" aria-label="编辑模式"><button type="button" data-act="flow" title="自动排版：保留页面原有布局" aria-pressed="true">自动排版</button><button type="button" data-act="artboard" title="手动：自由调整当前页位置" aria-pressed="false">手动</button></div>
-      <button type="button" data-act="add-text" class="icon-only add-text" title="添加文字" aria-label="添加文字">${icon("Plus")}${icon("Type")}</button>${b("add-image", "ImagePlus", "添加图片", { cls: "icon-only" })}</div>
+      <button type="button" data-act="add-text" class="icon-only add-text" title="添加文字" aria-label="添加文字">${icon("Plus")}${icon("Type")}</button>${b("add-image", "ImagePlus", "添加图片", { cls: "icon-only" })}<button type="button" data-act="add-shape" class="icon-only add-shape" title="添加形状" aria-label="添加形状" aria-expanded="false" aria-haspopup="menu">${icon("Square")}${icon("ChevronDown")}</button></div>
     <div class="grp actions">
       ${b("edit", "Pencil", "编辑画布", { text: "编辑", cls: "edit-button", attrs: 'aria-pressed="false"' })}${b("done", "Check", "完成编辑，返回画布预览", { text: "完成", cls: "done-button", attrs: "hidden" })}
       <button data-act="preview" class="preview-button" title="播放" aria-label="播放" aria-expanded="false" aria-haspopup="menu">${icon("Play")}<span>播放</span>${icon("ChevronDown")}</button>
@@ -29,6 +43,7 @@ export function toolbarHTML({ HANDLES, WORKSPACE = false }) {
       <label class="color-control" title="文字颜色" aria-label="文字颜色"><span class="color-swatch"></span><input type="color" class="cpick" aria-label="文字颜色"></label>
       ${b("text-align", "AlignLeft", "左对齐；点击切换为居中", { cls: "icon-only text-align" })}</div>
     <div class="image-tools" hidden>${b("image-crop", "Crop", "裁切图片", { text: "裁切" })}${b("image-replace", "RefreshCw", "替换图片", { text: "替换" })}<div class="seg" role="group" aria-label="图片填充模式"><button data-act="image-fit" title="完整显示，保持比例">适应</button><button data-act="image-cover" title="裁切铺满，保持比例">填充</button></div></div>
+    <div class="shape-tools" hidden><label class="color-control shape-color shape-fill-color" title="填充色"><span class="shape-swatch"></span><input type="color" data-shape-prop="fill" aria-label="填充色"></label><label class="color-control shape-color shape-stroke-color" title="描边色"><span class="shape-swatch"></span><input type="color" data-shape-prop="stroke" aria-label="描边色"></label><div class="shape-width-control" role="group" aria-label="线宽"><span>线宽</span><div class="shape-number-field"><input type="number" min="0" max="16" step="1" data-shape-prop="width" aria-label="线宽"><div class="shape-steps"><button type="button" data-act="shape-width-up" title="增加线宽" aria-label="增加线宽">${icon("ChevronUp")}</button><button type="button" data-act="shape-width-down" title="减小线宽" aria-label="减小线宽">${icon("ChevronDown")}</button></div></div></div><label class="shape-number shape-adjust">调整<input type="range" min="0" max="50" step="1" data-shape-prop="adjust"></label></div>
     <div class="object-tools">${b("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${b("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${b("group-exit", "ChevronLeft", "返回上层组合", { cls: "icon-only", attrs: "hidden" })}${b("rotation", "RotateCw", "旋转", { cls: "icon-only", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}${b("element-more", "Ellipsis", "元素操作", { cls: "icon-only", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}</div>
   </div>
   <div class="crop-source" hidden aria-hidden="true"></div>
@@ -38,6 +53,7 @@ export function toolbarHTML({ HANDLES, WORKSPACE = false }) {
   <div class="menu-panel rotation-panel" data-menu="rotation" role="dialog" aria-label="旋转" hidden><div class="rotation-single"><label>角度 <input type="number" class="rotation-angle" step="1" aria-label="旋转角度"><span>°</span></label>${b('rotation-reset', 'RotateCw', '重置旋转为0°', {text:'重置为 0°'})}</div><p class="rotation-multiple" hidden>拖动旋转手柄，以整体中心旋转。</p></div>
   <div class="menu-panel text-layout-panel" data-menu="text-layout" role="menu" hidden><strong>文字适配</strong><p class="text-layout-status" role="status" aria-live="polite"></p>${b("text-height", "TextCursorInput", "保持字号，按内容调整文本框高度", { text: "高度随内容" })}${b("text-fit", "Type", "保持文本框，缩小字号以完整显示（最小 6px）", { text: "缩小字号适配" })}</div>
   <div class="menu-panel" data-menu="play" role="menu" hidden>${b("scroll-play", "PanelsTopBottom", "滚动播放：上下滚动浏览全部页面", { text: "滚动播放" })}${b("fullscreen", "Maximize", "全屏播放", { text: "全屏播放" })}</div>
+  <div class="menu-panel shape-palette" data-menu="shape" role="menu" aria-label="选择形状" hidden>${shapePalette}</div>
   <div class="menu-panel pop" data-menu="export" role="menu" hidden>
     ${b("pdf", "FileText", "下载 PDF", { text: "PDF 文档" })}${b("pptx", "Presentation", "下载 PPTX（文字和图片可编辑）", { text: "PowerPoint · 可编辑" })}<div class="menu-separator"></div>
     ${b("download", "Download", "下载 HTML", { text: "下载 HTML" })}${b("copy", "Copy", "复制 HTML", { text: "复制 HTML" })}${b("print", "Printer", "浏览器打印 / PDF", { text: "打印" })}

@@ -11,6 +11,7 @@ import { createPages } from "./pages.js";
 import { textMetrics, scaleText } from "./typography.js";
 import { createTextLayout } from "./text-layout.js";
 import { icon } from "./icons.js";
+import { makeShape, renderShape, shapeHasFill, shapeHasAdjust } from './shapes.js';
 import { rekeyDOMIds } from "./identifiers.js";
 import { createGuides } from "./guides.js";
 import { layerChanges } from "./layers.js";
@@ -219,6 +220,7 @@ import {
     function history(dir) {
       if (crop.active) return crop.history(dir);
       endText();
+      finishAllShapeParams();
       const from = dir < 0 ? S.undo : S.redo,
         to = dir < 0 ? S.redo : S.undo,
         c = from.pop();
@@ -298,7 +300,7 @@ import {
         markActive();
         syncBar();
       },
-      flush: () => persistence?.flush() || Promise.resolve(),
+      flush: () => { finishAllShapeParams(); return persistence?.flush() || Promise.resolve(); },
       save: () => save(),
       toast,
     });
@@ -332,6 +334,7 @@ import {
     }
     function setEditing(on) {
       if (on && persistence && !persistence.canEdit()) return;
+      if (!on) finishAllShapeParams();
       S.editing = on;
       root.toggleAttribute("data-editing", on);
       host.toggleAttribute("data-editing", on);
@@ -368,6 +371,10 @@ import {
         "artboard",
         "add-text",
         "add-image",
+        "add-shape",
+        "shape-insert",
+        "shape-width-up",
+        "shape-width-down",
         "src-apply",
         "image-replace",
         "image-fit",
@@ -790,7 +797,7 @@ import {
       if (!initial.supported) return toast('这种变换暂不支持拖动、缩放或旋转');
       const media = el.matches(MEDIA), text = !media && !el.querySelector('[data-el],img,svg,canvas,video,iframe') && !!el.textContent.trim();
       const metrics = text && dir.length === 2 ? textMetrics(el) : null;
-      const before = snap(metrics ? metrics.map(m => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el]);
+      const before = snap(metrics ? metrics.map(m => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches('svg[data-shape]'));
       const hp = media || el.style.height ? 'height' : 'minHeight';
       const x0 = e.clientX, y0 = e.clientY;
       let g = initial, p = getPos(el), anchor, moved = false;
@@ -820,6 +827,7 @@ import {
           el.style.boxSizing = 'border-box'; el.style.maxWidth = 'none';
           if (dir !== 'n' && dir !== 's') el.style.width = Math.round(Math.max(8, w) * 1000) / 1000 + 'px';
           if (dir !== 'e' && dir !== 'w') { el.style[hp] = Math.round(Math.max(8, h) * 1000) / 1000 + 'px'; if (el.matches('[data-crop-frame]')) cropImage(el).style.setProperty('height','100%','important'); }
+          if (el.matches('svg[data-shape]')) renderShape(el, { width: Math.max(8, w), height: Math.max(8, h) });
           setPos(el, p, p.x, p.y);
           const now = elementGeometry(el), current = resizeAnchor(now, dir);
           const d = inverseDelta(now.parent, anchor.x - current.x, anchor.y - current.y);
@@ -1031,6 +1039,15 @@ import {
       r.selectNodeContents(el);
       s.removeAllRanges();
       s.addRange(r);
+    }
+    function addShape(kind) {
+      const b = activeBoard();
+      if (!b || !visible(b) || !persistence?.canEdit()) return;
+      endText();
+      const el = makeShape(kind, elementId(b, 'shape'));
+      if (!el) return;
+      placeNew(el, b, kind === 'star' ? 132 : 220, kind === 'line' ? 8 : kind === 'arrow' ? 44 : 132);
+      select(el);
     }
     function addImage(src) {
       const b = activeBoard();
@@ -1279,6 +1296,19 @@ import {
       $(".text-tools").hidden = !text;
       $(".more-text-section").hidden = !text;
       $(".image-tools").hidden = !image;
+      const shape = !multi && el.matches('svg[data-shape]');
+      $(".shape-tools").hidden = !shape;
+      if (shape) {
+        for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust })) {
+          const input = $(`[data-shape-prop=${prop}]`);
+          if (ui.activeElement !== input) input.value = value;
+        }
+        $('.shape-color').hidden = !shapeHasFill(el.dataset.shape);
+        $('.shape-fill-color .shape-swatch').style.background = el.dataset.shapeFill;
+        $('.shape-stroke-color .shape-swatch').style.borderColor = el.dataset.shapeStroke;
+        $('.shape-adjust').hidden = !shapeHasAdjust(el.dataset.shape);
+        $('.shape-adjust').firstChild.textContent = ({ rect: '圆角', star: '尖角', arrow: '箭头', blockArrow: '箭头' })[el.dataset.shape] || '调整';
+      }
       if (image) {
         const fit = getComputedStyle(cropImage(el)).objectFit;
         $("[data-act=image-fit]").setAttribute(
@@ -1395,7 +1425,8 @@ import {
             ) &&
           !zoomKey &&
           !(e.key==="Escape" && S.text && e.composedPath().includes(S.text.el)) &&
-          !(controlKey && e.key.toLowerCase() === "s")
+          !(controlKey && (e.key.toLowerCase() === "s" ||
+            (['z', 'y'].includes(e.key.toLowerCase()) && e.composedPath().some(n => n instanceof Element && n.hasAttribute('data-shape-prop')))))
         )
           return;
         if (!modal.hidden && !zoomKey && !(controlKey && e.key.toLowerCase()==='s') && e.key!=='Escape') return;
@@ -1808,6 +1839,10 @@ import {
         S.replace = null;
         fileIn.click();
       },
+      "add-shape": (btn) => openMenu('shape', btn),
+      "shape-insert": (btn) => addShape(btn.dataset.shapeKind),
+      "shape-width-up": () => stepShapeWidth(1),
+      "shape-width-down": () => stepShapeWidth(-1),
       undo: () => history(-1),
       redo: () => history(1),
       "page-add": () => pages.add(),
@@ -1887,6 +1922,9 @@ import {
       "artboard",
       "add-text",
       "add-image",
+      "shape-insert",
+      "shape-width-up",
+      "shape-width-down",
       "undo",
       "redo",
       "src-apply",
@@ -1924,10 +1962,57 @@ import {
       const act = btn.dataset.act;
       if (!act) return;
       if (
-        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation"].includes(act)
+        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape"].includes(act)
       )
         closeMenus();
       runAction(act, btn);
+    });
+    const shapePending = new Map();
+    function previewShapeParam(input) {
+      const prop = input.dataset?.shapeProp;
+      const el = S.sel;
+      if (!prop || !el?.matches('svg[data-shape]') || !S.editing || !persistence?.canEdit()) return;
+      const field = { fill: 'shapeFill', stroke: 'shapeStroke', width: 'shapeWidth', adjust: 'shapeAdjust' }[prop];
+      if (!field) return;
+      if (['width', 'adjust'].includes(prop) && !Number.isFinite(input.valueAsNumber)) return;
+      const pending = shapePending.get(input);
+      const fresh = !pending || pending.el !== el;
+      if (fresh) shapePending.set(input, { el, before: snap([el], true) });
+      el.dataset[field] = input.value;
+      if (prop === 'stroke' && Number(el.dataset.shapeWidth) === 0) {
+        el.dataset.shapeWidth = '2';
+        $('[data-shape-prop=width]').value = '2';
+      }
+      if (prop === 'fill') $('.shape-fill-color .shape-swatch').style.background = input.value;
+      if (prop === 'stroke') $('.shape-stroke-color .shape-swatch').style.borderColor = input.value;
+      renderShape(el);
+      if (fresh) persistence?.markDirty();
+    }
+    function finishShapeParam(input) {
+      const pending = shapePending.get(input);
+      if (!pending) return;
+      shapePending.delete(input);
+      if (pending.el.isConnected) commit(pending.before, pending.el.closest('[data-artboard]'));
+      drawSel();
+    }
+    function finishAllShapeParams() {
+      for (const input of [...shapePending.keys()]) finishShapeParam(input);
+    }
+    function stepShapeWidth(delta) {
+      if (!S.sel?.matches('svg[data-shape]')) return;
+      const input = $('[data-shape-prop=width]');
+      input.value = String(Math.max(0, Math.min(16, (Number(input.value) || 0) + delta)));
+      previewShapeParam(input);
+      finishShapeParam(input);
+    }
+    ui.addEventListener('input', e => previewShapeParam(e.target));
+    ui.addEventListener('change', e => {
+      if (!e.target.dataset?.shapeProp) return;
+      previewShapeParam(e.target);
+      finishShapeParam(e.target);
+    });
+    ui.addEventListener('focusout', e => {
+      if (e.target.dataset?.shapeProp) finishShapeParam(e.target);
     });
     ui.addEventListener("keydown", (e) => {
       if (e.target.matches('.rotation-angle')) return;
@@ -2279,6 +2364,7 @@ import {
     }
     function save() {
       crop.finish(); endText();
+      finishAllShapeParams();
       persistence.save();
     }
     const exportFile = createExporter({
@@ -2325,7 +2411,7 @@ import {
       changed: (value) => {
         S.changed = value;
       },
-      isBusy: () => !!S.drag || crop.active || sourcePending(),
+      isBusy: () => !!S.drag || crop.active || shapePending.size > 0 || sourcePending(),
       hasPendingSource: () => sourcePending() || pages.hasPendingRename(),
       pause() {
         if (sourcePending() || pages.hasPendingRename()) return false;
