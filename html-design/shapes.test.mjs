@@ -69,7 +69,7 @@ test('shape palette inserts eight persistent, individually editable elements; pa
     await p.locator('[data-shape-prop=stroke]').fill('#19a974');
     assert.equal(await shapes.first().getAttribute('data-shape-width'), '2', 'changing a hidden stroke makes it visible');
     assert.equal(await shapes.first().locator('rect').getAttribute('stroke'), '#19a974');
-    assert.equal(await p.locator('.shape-number-field').evaluate(n => getComputedStyle(n).backgroundColor), 'rgb(56, 56, 56)');
+    assert.equal(await p.locator('.shape-tools .number-stepper').evaluate(n => getComputedStyle(n).backgroundColor), 'rgb(56, 56, 56)');
     await p.locator('[data-act=shape-width-up]').click();
     assert.equal(await shapes.first().getAttribute('data-shape-width'), '3');
     await p.locator('[data-act=shape-width-down]').click();

@@ -618,6 +618,11 @@ test("menus are keyboard accessible, source keeps focus, numeric font size and s
         .evaluate((n) => getComputedStyle(n).fontSize),
       "80px",
     );
+    assert.equal(await p.locator('.text-tools .number-stepper').count(), 1);
+    await p.locator('[data-act=font-size-up]').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(n => getComputedStyle(n).fontSize), '81px');
+    await p.locator('[data-act=font-size-down]').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(n => getComputedStyle(n).fontSize), '80px');
     await p.keyboard.press("Escape");
     await p.locator("[data-act=more]").focus();
     await p.keyboard.press("Enter");
