@@ -20,8 +20,23 @@ const defaultStrokeWidth = kind => kind === 'line' || kind === 'arrow' ? 4 : 2;
 const dimensions = kind => ({ width: kind === 'star' ? 132 : 220, height: kind === 'line' ? 8 : kind === 'arrow' ? 44 : 132 });
 const dimension = (value, fallback) => Number.isFinite(Number(value)) && Number(value) >= 8 ? Math.round(Number(value) * 1000) / 1000 : fallback;
 const viewBox = (width, height) => `0 0 ${width} ${height}`;
+const ROUNDABLE = new Set(['rect', 'triangle', 'diamond', 'star', 'blockArrow']);
+const roundedPolygon = (points, radius, attrs) => {
+  if (!radius) return `<polygon points="${points}" ${attrs}/>`;
+  const vertices = points.split(' ').map(pair => pair.split(',').map(Number));
+  const corners = vertices.map(([x, y], i) => {
+    const prev = vertices[(i + vertices.length - 1) % vertices.length];
+    const next = vertices[(i + 1) % vertices.length];
+    const a = Math.hypot(prev[0] - x, prev[1] - y), b = Math.hypot(next[0] - x, next[1] - y);
+    const cut = Math.min(radius, a / 2, b / 2);
+    return { x, y, start: [x + (prev[0] - x) * cut / a, y + (prev[1] - y) * cut / a], end: [x + (next[0] - x) * cut / b, y + (next[1] - y) * cut / b] };
+  });
+  const [first, ...rest] = corners;
+  const d = `M${first.start} Q${first.x},${first.y} ${first.end} ` + rest.map(c => `L${c.start} Q${c.x},${c.y} ${c.end}`).join(' ') + ` L${first.start}Z`;
+  return `<path d="${d}" ${attrs}/>`;
+};
 
-function shapeGeometry(kind, fill, stroke, sw, adjust, width, height) {
+function shapeGeometry(kind, fill, stroke, sw, adjust, radius, width, height) {
   const edge = Math.min(sw / 2, (width - 1) / 2, (height - 1) / 2);
   const midX = width / 2, midY = height / 2;
   const tipX = width - edge, bottom = height - edge;
@@ -32,26 +47,26 @@ function shapeGeometry(kind, fill, stroke, sw, adjust, width, height) {
   const filled = `fill="${fill}" ${outline}`;
   const lineStyle = `fill="none" stroke="${stroke}" stroke-width="${Math.max(1, sw)}" stroke-linecap="round" stroke-linejoin="round"`;
   const geometry = {
-    rect: `<rect x="${edge}" y="${edge}" width="${width - 2 * edge}" height="${height - 2 * edge}" rx="${adjust}" ${filled}/>` ,
+    rect: `<rect x="${edge}" y="${edge}" width="${width - 2 * edge}" height="${height - 2 * edge}" rx="${radius}" ${filled}/>` ,
     ellipse: `<ellipse cx="${midX}" cy="${midY}" rx="${midX - edge}" ry="${midY - edge}" ${filled}/>` ,
-    triangle: `<polygon points="${midX},${edge} ${tipX},${bottom} ${edge},${bottom}" ${filled}/>` ,
-    diamond: `<polygon points="${midX},${edge} ${tipX},${midY} ${midX},${bottom} ${edge},${midY}" ${filled}/>` ,
-    star: `<polygon points="${starPoints(12 + adjust * .52, edge, width, height)}" ${filled}/>` ,
+    triangle: roundedPolygon(`${midX},${edge} ${tipX},${bottom} ${edge},${bottom}`, radius, filled),
+    diamond: roundedPolygon(`${midX},${edge} ${tipX},${midY} ${midX},${bottom} ${edge},${midY}`, radius, filled),
+    star: roundedPolygon(starPoints(12 + adjust * .52, edge, width, height), radius, filled),
     line: `<path d="M${edge} ${midY}H${tipX}" ${lineStyle}/>` ,
     arrow: `<path d="M${edge} ${midY}H${tipX} M${width * (190 - adjust) / 200} ${edge}L${tipX} ${midY}L${width * (190 - adjust) / 200} ${bottom}" ${lineStyle}/>` ,
-    blockArrow: `<polygon points="${edge},${shaftTop} ${headX},${shaftTop} ${headX},${edge} ${tipX},${midY} ${headX},${bottom} ${headX},${shaftBottom} ${edge},${shaftBottom}" ${filled}/>` ,
+    blockArrow: roundedPolygon(`${edge},${shaftTop} ${headX},${shaftTop} ${headX},${edge} ${tipX},${midY} ${headX},${bottom} ${headX},${shaftBottom} ${edge},${shaftBottom}`, radius, filled),
   };
   return geometry[kind] || '';
 }
 
 // AI can materialize a complete, editable shape from explicit parameters.
 // The SVG child stays in the saved HTML, so it also renders without the editor.
-export function shapeMarkup({ id, kind, fill = '#86868b', stroke = '#86868b', strokeWidth = defaultStrokeWidth(kind), adjust = kind === 'rect' ? 12 : 20, width, height }) {
+export function shapeMarkup({ id, kind, fill = '#86868b', stroke = '#86868b', strokeWidth = defaultStrokeWidth(kind), adjust = kind === 'rect' ? 12 : 20, radius = kind === 'rect' ? adjust : 0, width, height }) {
   if (!id || !SHAPE_NAMES[kind]) throw new Error('shapeMarkup requires a unique id and supported kind');
-  const params = { fill: color(fill, '#86868b'), stroke: color(stroke, '#86868b'), strokeWidth: clamp(strokeWidth, 0, 16), adjust: clamp(adjust, 0, 50) };
+  const params = { fill: color(fill, '#86868b'), stroke: color(stroke, '#86868b'), strokeWidth: clamp(strokeWidth, 0, 16), adjust: clamp(adjust, 0, 50), radius: clamp(radius, 0, 50) };
   const defaults = dimensions(kind);
   const size = { width: dimension(width, defaults.width), height: dimension(height, defaults.height) };
-  return `<svg data-el="${escapeAttr(id)}" data-shape="${kind}" aria-label="${SHAPE_NAMES[kind]}" data-shape-fill="${params.fill}" data-shape-stroke="${params.stroke}" data-shape-width="${params.strokeWidth}" data-shape-adjust="${params.adjust}" viewBox="${viewBox(size.width, size.height)}" preserveAspectRatio="none" style="width:${size.width}px;height:${size.height}px;display:block;overflow:visible">${shapeGeometry(kind, params.fill, params.stroke, params.strokeWidth, params.adjust, size.width, size.height)}</svg>`;
+  return `<svg data-el="${escapeAttr(id)}" data-shape="${kind}" aria-label="${SHAPE_NAMES[kind]}" data-shape-fill="${params.fill}" data-shape-stroke="${params.stroke}" data-shape-width="${params.strokeWidth}" data-shape-adjust="${params.adjust}" data-shape-radius="${params.radius}" viewBox="${viewBox(size.width, size.height)}" preserveAspectRatio="none" style="width:${size.width}px;height:${size.height}px;display:block;overflow:visible">${shapeGeometry(kind, params.fill, params.stroke, params.strokeWidth, params.adjust, params.radius, size.width, size.height)}</svg>`;
 }
 
 // Geometry is materialized in the saved SVG. There is no script-time reconstruction.
@@ -67,7 +82,8 @@ export function renderShape(el, size) {
   const stroke = color(el.dataset.shapeStroke, '#86868b');
   const sw = clamp(el.dataset.shapeWidth ?? defaultStrokeWidth(kind), 0, 16);
   const adjust = clamp(el.dataset.shapeAdjust ?? 20, 0, 50);
-  el.innerHTML = shapeGeometry(kind, fill, stroke, sw, adjust, width, height);
+  const radius = clamp(el.dataset.shapeRadius ?? (kind === 'rect' ? adjust : 0), 0, 50);
+  el.innerHTML = shapeGeometry(kind, fill, stroke, sw, adjust, radius, width, height);
 }
 
 export function makeShape(kind, id) {
@@ -80,6 +96,7 @@ export function makeShape(kind, id) {
   el.dataset.shapeStroke = '#86868b';
   el.dataset.shapeWidth = String(defaultStrokeWidth(kind));
   el.dataset.shapeAdjust = kind === 'rect' ? '12' : '20';
+  el.dataset.shapeRadius = kind === 'rect' ? '12' : '0';
   const size = dimensions(kind);
   el.style.width = `${size.width}px`;
   el.style.height = `${size.height}px`;
@@ -90,4 +107,5 @@ export function makeShape(kind, id) {
 }
 
 export const shapeHasFill = kind => kind !== 'line' && kind !== 'arrow';
-export const shapeHasAdjust = kind => ['rect', 'star', 'arrow', 'blockArrow'].includes(kind);
+export const shapeHasAdjust = kind => ['star', 'arrow', 'blockArrow'].includes(kind);
+export const shapeHasRadius = kind => ROUNDABLE.has(kind);

@@ -156,12 +156,14 @@ export function collectEditableSlide(board) {
       const native = { rect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', diamond: 'diamond', star: 'star5', line: 'line', arrow: 'line', blockArrow: 'rightArrow' }[kind];
       const view = el.viewBox.baseVal;
       const radiusScale = view.width && view.height ? Math.min(box.w / view.width, box.h / view.height) : 1;
+      const shapeRadius = Number(el.dataset.shapeRadius ?? (kind === 'rect' ? el.dataset.shapeAdjust : 0)) || 0;
       const hex = value => /^#[0-9a-f]{6}$/i.test(value || '') ? value.slice(1).toUpperCase() : '1D1D1F';
       if (native) emit(el, { kind: 'nativeShape', ...box, name, native, shapeKind: kind,
         fill: hex(el.dataset.shapeFill), stroke: hex(el.dataset.shapeStroke),
-        width: Number(el.dataset.shapeWidth) || 0, adjust: Number(el.dataset.shapeAdjust) || 0, radiusScale });
+        width: Number(el.dataset.shapeWidth) || 0, adjust: Number(el.dataset.shapeAdjust) || 0, radius: shapeRadius, radiusScale });
       else emit(el, { kind: 'graphic', ...box, name, index: graphics.indexOf(el) });
       if (['star', 'arrow', 'blockArrow'].includes(kind)) warnings.push(`${name}: PPTX 原生形状的细部参数可能与 HTML 不同`);
+      if (shapeRadius > 0 && kind !== 'rect') warnings.push(`${name}: PPTX 原生形状不保留此圆角参数`);
     } else if (el.matches('svg,canvas')) {
       emit(el, { kind: 'graphic', ...box, name, index: graphics.indexOf(el) });
     } else if (el.hasAttribute('data-el') && !el.querySelector('[data-el]') && el.textContent.trim()) {
@@ -279,7 +281,7 @@ export async function addEditableSlide({ pptx, slide, data, page, board, context
         line: { color: item.stroke, width: pt(Math.max(isLine ? 1 : 0, item.width)),
           transparency: item.width ? 0 : 100,
           endArrowType: item.shapeKind === 'arrow' ? 'triangle' : undefined },
-        rectRadius: item.shapeKind === 'rect' ? px(item.adjust * item.radiusScale) : undefined,
+        rectRadius: item.shapeKind === 'rect' ? px(item.radius * item.radiusScale) : undefined,
       });
     } else if (item.kind === 'shape') {
       slide.addShape(pptx.ShapeType[item.geometry], {

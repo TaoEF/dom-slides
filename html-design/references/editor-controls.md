@@ -9,7 +9,7 @@
 - 拖动移动元素，双击改字或裁切图片，替换图片使用工具条「替换」。文字角点同比缩放字号、内部小字和行距，边点只调整框；图片提供「适应」完整显示与「填充」裁切铺满。可用顶部入口插入文字/图片，也可拖入或粘贴图片。
 - 顶部「自动排版 / 手动」只切换当前页；切回自动排版恢复该页快照，原绝对定位 CSS 不会自动变成 Flex。
 - 文字「更多 → 文字适配」检测溢出，提供「高度随内容」与「缩小字号适配」（最小6px），均可单步撤销。
-- 顶部形状入口可插入八种基础形状。选中后圆形色样分别控制填充、描边，线宽用数字或箭头调整，部分形状有圆角或尖角参数。拉伸时线宽与圆角保持设计像素值。
+- 顶部形状入口可插入八种基础形状。选中后圆形色样分别控制填充、描边；线宽用数字或箭头调整。矩形、三角形、菱形、星形和块箭头有独立圆角控制；星形与箭头的其他几何调整在元素右键菜单。拉伸时线宽与圆角保持设计像素值。
 - 预览即可拖动缩略图排序、点「＋」新增，页面「⋯」可复制、重命名、删除、上下移动；缩略图支持 Ctrl/⌘ D、Delete、Alt + ↑/↓。拖动取消不提交排序。
 - 翠绿色辅助线提示页面/元素边缘、中心吸附，以及同一行或列中相邻对象的等距居中和间距延续；间距标签按设计像素显示整数，仅显示取整，不改实际几何或 Grid/Flex 的 gap。Alt/Option 暂停吸附，Esc 取消拖动。蓝色选框和控制点表示选择。
 
@@ -51,10 +51,10 @@
 ```js
 import { shapeMarkup } from './html-design/src/shapes.js';
 const svg = shapeMarkup({ id: 'p1-card-arrow', kind: 'blockArrow', width: 240, height: 72,
-  fill: '#86868b', stroke: '#383838', strokeWidth: 2, adjust: 24 });
+  fill: '#86868b', stroke: '#383838', strokeWidth: 2, radius: 12, adjust: 24 });
 ```
 
-将返回的完整 `<svg>` 放在对应画板中，并保持 `data-el` 唯一。`kind` 可取 `rect`、`ellipse`、`triangle`、`diamond`、`star`、`line`、`arrow`、`blockArrow`；`strokeWidth` 范围 0–16，`adjust` 范围 0–50，`width/height` 至少 8px。修改现有形状参数时，须同时更新 SVG 子节点；只改 `data-shape-*` 不会改变离线画面。编辑器的参数工具会自动同步两者。
+将返回的完整 `<svg>` 放在对应画板中，并保持 `data-el` 唯一。`kind` 可取 `rect`、`ellipse`、`triangle`、`diamond`、`star`、`line`、`arrow`、`blockArrow`；`strokeWidth` 范围 0–16，`radius` 和 `adjust` 范围 0–50，`width/height` 至少 8px。修改现有形状参数时，须同时更新 SVG 子节点；只改 `data-shape-*` 不会改变离线画面。编辑器的参数工具会自动同步两者。PPTX 对非矩形圆角会给出简化提示。
 
 ## 保存、审阅与导出
 
