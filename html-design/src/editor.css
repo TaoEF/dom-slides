@@ -641,7 +641,9 @@ button.primary:hover:not(:disabled) {
 .shape-steps { display: flex; flex-direction: column; width: 15px; height: 27px; }
 .shape-steps button { width: 15px; min-width: 15px; height: 13px; min-height: 13px; padding: 0; border-radius: 2px; color: #c9c9cc; }
 .shape-steps button .icon { width: 10px; height: 10px; }
-.shape-adjust input { width: 82px; accent-color: #c9c9cc; }
+.shape-radius input, .shape-adjust input { width: 82px; accent-color: #c9c9cc; }
+.shape-more-section[hidden] { display: none; }
+.shape-more-section .shape-adjust { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; font-size: 12px; }
 .menu-panel .icon {
   width: 16px;
   height: 16px;

@@ -11,7 +11,7 @@ import { createPages } from "./pages.js";
 import { textMetrics, scaleText } from "./typography.js";
 import { createTextLayout } from "./text-layout.js";
 import { icon } from "./icons.js";
-import { makeShape, renderShape, shapeHasFill, shapeHasAdjust } from './shapes.js';
+import { makeShape, renderShape, shapeHasFill, shapeHasAdjust, shapeHasRadius } from './shapes.js';
 import { rekeyDOMIds } from "./identifiers.js";
 import { createGuides } from "./guides.js";
 import { layerChanges } from "./layers.js";
@@ -1298,16 +1298,17 @@ import {
       $(".image-tools").hidden = !image;
       const shape = !multi && el.matches('svg[data-shape]');
       $(".shape-tools").hidden = !shape;
+      $('.shape-more-section').hidden = !shape || !shapeHasAdjust(el.dataset.shape);
       if (shape) {
-        for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust })) {
+        for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust, radius: el.dataset.shapeRadius ?? (el.dataset.shape === 'rect' ? el.dataset.shapeAdjust : '0') })) {
           const input = $(`[data-shape-prop=${prop}]`);
           if (ui.activeElement !== input) input.value = value;
         }
         $('.shape-color').hidden = !shapeHasFill(el.dataset.shape);
         $('.shape-fill-color .shape-swatch').style.background = el.dataset.shapeFill;
         $('.shape-stroke-color .shape-swatch').style.borderColor = el.dataset.shapeStroke;
-        $('.shape-adjust').hidden = !shapeHasAdjust(el.dataset.shape);
-        $('.shape-adjust').firstChild.textContent = ({ rect: '圆角', star: '尖角', arrow: '箭头', blockArrow: '箭头' })[el.dataset.shape] || '调整';
+        $('.shape-radius').hidden = !shapeHasRadius(el.dataset.shape);
+        $('.shape-adjust').firstChild.textContent = ({ star: '尖角', arrow: '箭头', blockArrow: '箭头' })[el.dataset.shape] || '形状调整';
       }
       if (image) {
         const fit = getComputedStyle(cropImage(el)).objectFit;
@@ -1972,9 +1973,9 @@ import {
       const prop = input.dataset?.shapeProp;
       const el = S.sel;
       if (!prop || !el?.matches('svg[data-shape]') || !S.editing || !persistence?.canEdit()) return;
-      const field = { fill: 'shapeFill', stroke: 'shapeStroke', width: 'shapeWidth', adjust: 'shapeAdjust' }[prop];
+      const field = { fill: 'shapeFill', stroke: 'shapeStroke', width: 'shapeWidth', adjust: 'shapeAdjust', radius: 'shapeRadius' }[prop];
       if (!field) return;
-      if (['width', 'adjust'].includes(prop) && !Number.isFinite(input.valueAsNumber)) return;
+      if (['width', 'adjust', 'radius'].includes(prop) && !Number.isFinite(input.valueAsNumber)) return;
       const pending = shapePending.get(input);
       const fresh = !pending || pending.el !== el;
       if (fresh) shapePending.set(input, { el, before: snap([el], true) });
