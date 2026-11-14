@@ -48,7 +48,7 @@ import {
   GripVertical,
   TextCursorInput,
   CheckCheck,
-  RotateCw,
+  RotateCwSquare,
   Group,
   Ungroup,
 } from "lucide";
@@ -102,7 +102,7 @@ const icons = {
   GripVertical,
   TextCursorInput,
   CheckCheck,
-  RotateCw,
+  RotateCwSquare,
   Group,
   Ungroup,
 };

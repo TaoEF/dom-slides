@@ -1346,6 +1346,11 @@ import {
         e.target.blur();
       }
     });
+    function stepFontSize(delta) {
+      const input = $(".fs");
+      const current = Number(input.value) || parseFloat(getComputedStyle(S.text?.el || S.sel).fontSize) || 18;
+      fmt("size", Math.max(6, Math.min(999, Math.round(current) + delta)));
+    }
     $('.rotation-angle').addEventListener('change', e => rotateTo(e.target.valueAsNumber));
     $('.rotation-angle').addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
@@ -1844,6 +1849,8 @@ import {
       "shape-insert": (btn) => addShape(btn.dataset.shapeKind),
       "shape-width-up": () => stepShapeWidth(1),
       "shape-width-down": () => stepShapeWidth(-1),
+      "font-size-up": () => stepFontSize(1),
+      "font-size-down": () => stepFontSize(-1),
       undo: () => history(-1),
       redo: () => history(1),
       "page-add": () => pages.add(),
@@ -1926,6 +1933,8 @@ import {
       "shape-insert",
       "shape-width-up",
       "shape-width-down",
+      "font-size-up",
+      "font-size-down",
       "undo",
       "redo",
       "src-apply",
