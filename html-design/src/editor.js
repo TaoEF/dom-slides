@@ -1,3 +1,4 @@
+import { createWorkspaceTransfer } from "./workspace-transfer.js";
 import { selectionFrame, frameCorner, resizeCursor, sameSelection, rotationGroups, groupLocalAngle, writeGroupAngle } from './oriented-selection.js';
 import { isGroup, groupRoots, objectRect, logicalTarget, groupProblem, groupStructureProblem, stableGroupMarkup, layoutProbe } from "./groups.js";
 import { createCrop, cropImage } from './crop.js';
@@ -10,6 +11,7 @@ import { createPages } from "./pages.js";
 import { textMetrics, scaleText } from "./typography.js";
 import { createTextLayout } from "./text-layout.js";
 import { icon } from "./icons.js";
+import { makeShape, renderShape, shapeHasFill, shapeHasAdjust, shapeHasRadius } from './shapes.js';
 import { rekeyDOMIds } from "./identifiers.js";
 import { createGuides } from "./guides.js";
 import { layerChanges } from "./layers.js";
@@ -27,7 +29,7 @@ import {
 
   const MEDIA = 'img,video,canvas,svg,iframe,picture,[data-crop-frame]';
   const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
-  const SKIP_ATTR = /^(contenteditable|data-editor-current)$/; // 编辑器临时属性：不进撤销、不触发缩略图刷新
+  const SKIP_ATTR = /^(contenteditable|data-editor-current|data-editor-drop-target|data-editor-drag-source)$/; // 编辑器临时属性：不进撤销、不触发缩略图刷新
 
   function main() {
     const root = document.documentElement;
@@ -48,6 +50,7 @@ import {
       undo: [],
       redo: [],
       changed: false,
+      workspace: false,
       zoom: 1,
       fit: true,
       replace: null,
@@ -99,7 +102,7 @@ import {
     }).observe(root, { childList: true });
 
     const ui = host.attachShadow({ mode: "open" });
-    ui.innerHTML = toolbarHTML({ HANDLES });
+    ui.innerHTML = toolbarHTML({ HANDLES, WORKSPACE:stage.hasAttribute("data-workspace-prototype") });
     const $ = (s) => ui.querySelector(s);
     const side = $(".nav"),
       head = $(".head"),
@@ -217,6 +220,7 @@ import {
     function history(dir) {
       if (crop.active) return crop.history(dir);
       endText();
+      finishAllShapeParams();
       const from = dir < 0 ? S.undo : S.redo,
         to = dir < 0 ? S.redo : S.undo,
         c = from.pop();
@@ -283,6 +287,7 @@ import {
       host,
       ui,
       style: zoomStyle,
+      withAll,
       draw: drawSel,
       pageStep,
       finishEditing(resume) {
@@ -295,9 +300,12 @@ import {
         markActive();
         syncBar();
       },
-      flush: () => persistence?.flush() || Promise.resolve(),
+      flush: () => { finishAllShapeParams(); return persistence?.flush() || Promise.resolve(); },
       save: () => save(),
       toast,
+    });
+    const transfer = createWorkspaceTransfer({ S, stage, ui, viewport, snap, apply, push, select, elementId, canEdit:()=>S.editing&&!S.playing&&!!persistence?.canEdit(),toast,
+      activate(b,focus=false){setCurrent(b);markActive();syncBar();if(focus)viewport.workspaceActive()?viewport.focusCurrent():viewport.refresh(true);}
     });
     const applyZoom = (z, at = null) => viewport.zoom(z, at);
     const zoomStep = (dir) => viewport.step(dir);
@@ -326,6 +334,7 @@ import {
     }
     function setEditing(on) {
       if (on && persistence && !persistence.canEdit()) return;
+      if (!on) finishAllShapeParams();
       S.editing = on;
       root.toggleAttribute("data-editing", on);
       host.toggleAttribute("data-editing", on);
@@ -362,6 +371,10 @@ import {
         "artboard",
         "add-text",
         "add-image",
+        "add-shape",
+        "shape-insert",
+        "shape-width-up",
+        "shape-width-down",
         "src-apply",
         "image-replace",
         "image-fit",
@@ -714,9 +727,10 @@ import {
       if (!transformable(S.selection) || positions.some(item => !item.g.supported)) return toast('这种变换暂不支持拖动、缩放或旋转');
       let alignment = guides.begin(nodes, b, S.group);
       const x0 = e.clientX,
-        y0 = e.clientY;
-      let moved = false;
+        y0 = e.clientY, boardStart = b.getBoundingClientRect(), cross = transfer.enabled ? transfer.begin(S.selection) : null;
+      let moved = false, lastEvent = e;
       S.drag = {
+        kind: 'element',
         move(ev) {
           if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3)
             return;
@@ -728,12 +742,13 @@ import {
             alignment = guides.begin(nodes, b, S.group);
           }
           moved = true;
+          lastEvent=ev;
+          const currentBoard=b.getBoundingClientRect(), currentScale=scaleOf(b), workspace=viewport.workspaceActive();
+          const outside=workspace && (ev.clientX<currentBoard.left||ev.clientX>currentBoard.right||ev.clientY<currentBoard.top||ev.clientY>currentBoard.bottom);
           const delta = alignment.move(
-            {
-              x: (ev.clientX - x0) / s,
-              y: (ev.clientY - y0) / s,
-            },
-            ev.altKey,
+            {x:workspace?(ev.clientX-currentBoard.left)/currentScale-(x0-boardStart.left)/s:(ev.clientX-x0)/s,
+             y:workspace?(ev.clientY-currentBoard.top)/currentScale-(y0-boardStart.top)/s:(ev.clientY-y0)/s},
+            ev.altKey || outside,
           );
           positions.forEach(({ node, p, g }) => {
             const d = inverseDelta(g.parent, delta.x * s, delta.y * s);
@@ -741,12 +756,16 @@ import {
           });
           drawSel();
           alignment.draw(delta.matches);
+          if(cross)transfer.move(cross,ev);
         },
-        up() {
+        up(event) {
           guides.clear();
+          if(moved&&cross&&transfer.drop(cross,event||lastEvent))return;
+          transfer.clear();
           if (moved) commit(before, b);
         },
         cancel() {
+          transfer.clear();
           guides.clear();
           apply(before);
           drawSel();
@@ -778,7 +797,7 @@ import {
       if (!initial.supported) return toast('这种变换暂不支持拖动、缩放或旋转');
       const media = el.matches(MEDIA), text = !media && !el.querySelector('[data-el],img,svg,canvas,video,iframe') && !!el.textContent.trim();
       const metrics = text && dir.length === 2 ? textMetrics(el) : null;
-      const before = snap(metrics ? metrics.map(m => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el]);
+      const before = snap(metrics ? metrics.map(m => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches('svg[data-shape]'));
       const hp = media || el.style.height ? 'height' : 'minHeight';
       const x0 = e.clientX, y0 = e.clientY;
       let g = initial, p = getPos(el), anchor, moved = false;
@@ -808,6 +827,7 @@ import {
           el.style.boxSizing = 'border-box'; el.style.maxWidth = 'none';
           if (dir !== 'n' && dir !== 's') el.style.width = Math.round(Math.max(8, w) * 1000) / 1000 + 'px';
           if (dir !== 'e' && dir !== 'w') { el.style[hp] = Math.round(Math.max(8, h) * 1000) / 1000 + 'px'; if (el.matches('[data-crop-frame]')) cropImage(el).style.setProperty('height','100%','important'); }
+          if (el.matches('svg[data-shape]')) renderShape(el, { width: Math.max(8, w), height: Math.max(8, h) });
           setPos(el, p, p.x, p.y);
           const now = elementGeometry(el), current = resizeAnchor(now, dir);
           const d = inverseDelta(now.parent, anchor.x - current.x, anchor.y - current.y);
@@ -1019,6 +1039,15 @@ import {
       r.selectNodeContents(el);
       s.removeAllRanges();
       s.addRange(r);
+    }
+    function addShape(kind) {
+      const b = activeBoard();
+      if (!b || !visible(b) || !persistence?.canEdit()) return;
+      endText();
+      const el = makeShape(kind, elementId(b, 'shape'));
+      if (!el) return;
+      placeNew(el, b, kind === 'star' ? 132 : 220, kind === 'line' ? 8 : kind === 'arrow' ? 44 : 132);
+      select(el);
     }
     function addImage(src) {
       const b = activeBoard();
@@ -1267,6 +1296,20 @@ import {
       $(".text-tools").hidden = !text;
       $(".more-text-section").hidden = !text;
       $(".image-tools").hidden = !image;
+      const shape = !multi && el.matches('svg[data-shape]');
+      $(".shape-tools").hidden = !shape;
+      $('.shape-more-section').hidden = !shape || !shapeHasAdjust(el.dataset.shape);
+      if (shape) {
+        for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust, radius: el.dataset.shapeRadius ?? (el.dataset.shape === 'rect' ? el.dataset.shapeAdjust : '0') })) {
+          const input = $(`[data-shape-prop=${prop}]`);
+          if (ui.activeElement !== input) input.value = value;
+        }
+        $('.shape-color').hidden = !shapeHasFill(el.dataset.shape);
+        $('.shape-fill-color .shape-swatch').style.background = el.dataset.shapeFill;
+        $('.shape-stroke-color .shape-swatch').style.borderColor = el.dataset.shapeStroke;
+        $('.shape-radius').hidden = !shapeHasRadius(el.dataset.shape);
+        $('.shape-adjust').firstChild.textContent = ({ star: '尖角', arrow: '箭头', blockArrow: '箭头' })[el.dataset.shape] || '形状调整';
+      }
       if (image) {
         const fit = getComputedStyle(cropImage(el)).objectFit;
         $("[data-act=image-fit]").setAttribute(
@@ -1303,6 +1346,11 @@ import {
         e.target.blur();
       }
     });
+    function stepFontSize(delta) {
+      const input = $(".fs");
+      const current = Number(input.value) || parseFloat(getComputedStyle(S.text?.el || S.sel).fontSize) || 18;
+      fmt("size", Math.max(6, Math.min(999, Math.round(current) + delta)));
+    }
     $('.rotation-angle').addEventListener('change', e => rotateTo(e.target.valueAsNumber));
     $('.rotation-angle').addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
@@ -1384,7 +1432,8 @@ import {
             ) &&
           !zoomKey &&
           !(e.key==="Escape" && S.text && e.composedPath().includes(S.text.el)) &&
-          !(controlKey && e.key.toLowerCase() === "s")
+          !(controlKey && (e.key.toLowerCase() === "s" ||
+            (['z', 'y'].includes(e.key.toLowerCase()) && e.composedPath().some(n => n instanceof Element && n.hasAttribute('data-shape-prop')))))
         )
           return;
         if (!modal.hidden && !zoomKey && !(controlKey && e.key.toLowerCase()==='s') && e.key!=='Escape') return;
@@ -1513,6 +1562,10 @@ import {
         if (fromUI(e)) return;
         closeMenus();
         host.removeAttribute("data-mobile-nav");
+        const clickedBoard = e.target.closest?.('[data-artboard]');
+        if (viewport.workspaceActive() && clickedBoard && clickedBoard!==S.current) {
+          crop.finish(); endText(); select(null); setCurrent(clickedBoard); markActive(); syncBar();
+        }
         if (!S.editing) return;
         if (!inStage(e.target)) {
           endText();
@@ -1599,6 +1652,8 @@ import {
       ),
     );
 
+    addEventListener('copy',e=>{if(!fromUI(e)&&!crop.active)transfer.copyEvent(e);},true);
+    addEventListener('paste',e=>{if(!fromUI(e)&&!crop.active)transfer.pasteEvent(e);},true);
     addEventListener(
       "paste",
       (e) => {
@@ -1759,6 +1814,8 @@ import {
         btn.setAttribute("aria-pressed", on);
         viewport.refresh(true);
       },
+      "view-single": () => viewport.view(false),
+      "view-workspace": () => viewport.view(true),
       prev: () => pageStep(-1),
       next: () => pageStep(1),
       edit: () => {
@@ -1789,6 +1846,12 @@ import {
         S.replace = null;
         fileIn.click();
       },
+      "add-shape": (btn) => openMenu('shape', btn),
+      "shape-insert": (btn) => addShape(btn.dataset.shapeKind),
+      "shape-width-up": () => stepShapeWidth(1),
+      "shape-width-down": () => stepShapeWidth(-1),
+      "font-size-up": () => stepFontSize(1),
+      "font-size-down": () => stepFontSize(-1),
       undo: () => history(-1),
       redo: () => history(1),
       "page-add": () => pages.add(),
@@ -1869,6 +1932,11 @@ import {
       "artboard",
       "add-text",
       "add-image",
+      "shape-insert",
+      "shape-width-up",
+      "shape-width-down",
+      "font-size-up",
+      "font-size-down",
       "undo",
       "redo",
       "src-apply",
@@ -1906,10 +1974,57 @@ import {
       const act = btn.dataset.act;
       if (!act) return;
       if (
-        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation"].includes(act)
+        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape"].includes(act)
       )
         closeMenus();
       runAction(act, btn);
+    });
+    const shapePending = new Map();
+    function previewShapeParam(input) {
+      const prop = input.dataset?.shapeProp;
+      const el = S.sel;
+      if (!prop || !el?.matches('svg[data-shape]') || !S.editing || !persistence?.canEdit()) return;
+      const field = { fill: 'shapeFill', stroke: 'shapeStroke', width: 'shapeWidth', adjust: 'shapeAdjust', radius: 'shapeRadius' }[prop];
+      if (!field) return;
+      if (['width', 'adjust', 'radius'].includes(prop) && !Number.isFinite(input.valueAsNumber)) return;
+      const pending = shapePending.get(input);
+      const fresh = !pending || pending.el !== el;
+      if (fresh) shapePending.set(input, { el, before: snap([el], true) });
+      el.dataset[field] = input.value;
+      if (prop === 'stroke' && Number(el.dataset.shapeWidth) === 0) {
+        el.dataset.shapeWidth = '2';
+        $('[data-shape-prop=width]').value = '2';
+      }
+      if (prop === 'fill') $('.shape-fill-color .shape-swatch').style.background = input.value;
+      if (prop === 'stroke') $('.shape-stroke-color .shape-swatch').style.borderColor = input.value;
+      renderShape(el);
+      if (fresh) persistence?.markDirty();
+    }
+    function finishShapeParam(input) {
+      const pending = shapePending.get(input);
+      if (!pending) return;
+      shapePending.delete(input);
+      if (pending.el.isConnected) commit(pending.before, pending.el.closest('[data-artboard]'));
+      drawSel();
+    }
+    function finishAllShapeParams() {
+      for (const input of [...shapePending.keys()]) finishShapeParam(input);
+    }
+    function stepShapeWidth(delta) {
+      if (!S.sel?.matches('svg[data-shape]')) return;
+      const input = $('[data-shape-prop=width]');
+      input.value = String(Math.max(0, Math.min(16, (Number(input.value) || 0) + delta)));
+      previewShapeParam(input);
+      finishShapeParam(input);
+    }
+    ui.addEventListener('input', e => previewShapeParam(e.target));
+    ui.addEventListener('change', e => {
+      if (!e.target.dataset?.shapeProp) return;
+      previewShapeParam(e.target);
+      finishShapeParam(e.target);
+    });
+    ui.addEventListener('focusout', e => {
+      if (e.target.dataset?.shapeProp) finishShapeParam(e.target);
     });
     ui.addEventListener("keydown", (e) => {
       if (e.target.matches('.rotation-angle')) return;
@@ -2009,6 +2124,8 @@ import {
       ns.querySelectorAll("[data-editor-current],[contenteditable]").forEach(
         (n) => {
           n.removeAttribute("data-editor-current");
+          n.removeAttribute("data-editor-drop-target");
+          n.removeAttribute("data-editor-drag-source");
           n.removeAttribute("contenteditable");
         },
       );
@@ -2081,7 +2198,7 @@ import {
         );
       pages.clearTarget();
       host.removeAttribute("data-mobile-nav");
-      viewport.refresh(true);
+      viewport.workspaceActive() ? viewport.focusCurrent() : viewport.refresh(true);
       markActive();
       syncBar();
     }
@@ -2237,10 +2354,12 @@ import {
         .filter((a) => /^data-edit/.test(a.name))
         .forEach((a) => doc.removeAttribute(a.name));
       doc
-        .querySelectorAll("[contenteditable],[data-editor-current]")
+        .querySelectorAll("[contenteditable],[data-editor-current],[data-editor-drop-target],[data-editor-drag-source]")
         .forEach((n) => {
           n.removeAttribute("contenteditable");
           n.removeAttribute("data-editor-current");
+          n.removeAttribute("data-editor-drop-target");
+          n.removeAttribute("data-editor-drag-source");
         });
       return "<!DOCTYPE html>\n" + doc.outerHTML;
     }
@@ -2257,6 +2376,7 @@ import {
     }
     function save() {
       crop.finish(); endText();
+      finishAllShapeParams();
       persistence.save();
     }
     const exportFile = createExporter({
@@ -2303,7 +2423,7 @@ import {
       changed: (value) => {
         S.changed = value;
       },
-      isBusy: () => !!S.drag || crop.active || sourcePending(),
+      isBusy: () => !!S.drag || crop.active || shapePending.size > 0 || sourcePending(),
       hasPendingSource: () => sourcePending() || pages.hasPendingDraft(),
       pause() {
         if (sourcePending() || pages.hasPendingDraft()) return false;
@@ -2382,7 +2502,7 @@ import {
     buildNav();
     markActive();
     setEditing(false);
-    zoomFit();
+    stage.hasAttribute("data-workspace-prototype") ? viewport.view(true) : zoomFit();
     document.readyState === "complete"
       ? viewport.refresh()
       : addEventListener("load", () => {

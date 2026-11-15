@@ -1,3 +1,4 @@
+import { createWorkspaceView } from "./workspace-view.js";
 const STEPS = [
   0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 3, 4,
 ];
@@ -15,12 +16,16 @@ export function createViewport({
   flush,
   save,
   toast,
+  withAll,
 }) {
   let pan = { x: 0, y: 0 },
     space = false,
     panning,
     restore,
     playTimer;
+  const workspace = createWorkspaceView({S, root, stage, ui, withAll, activate(b) { finishEditing("pan"); currentPage(b); }, single:()=>view(false)});
+  host.toggleAttribute('data-workspace-enabled',workspace.enabled);
+  const workspaceActive = () => workspace.active();
   const clamp = (z) => Math.max(0.1, Math.min(4, Math.round(z * 1000) / 1000));
   function bounds() {
     if (S.playing) return { x: 0, y: 0, w: innerWidth, h: innerHeight };
@@ -30,16 +35,19 @@ export function createViewport({
     return { x: nav, y: 52, w: innerWidth - nav, h: innerHeight - 92 };
   }
   function size() {
+    if (workspace.active()) return workspace.layout();
     return {
       w: S.current?.offsetWidth || 1280,
       h: S.current?.offsetHeight || 720,
     };
   }
   function drawViewport() {
+    if (workspace.enabled && !S.playing) root.toggleAttribute('data-editor-single', !workspace.active());
     if (S.playing && S.playMode === "scroll") {
       const z = S.zoom,
         b = size();
       style.textContent = `@media screen{html[data-editor-scrolling] [data-stage]{position:fixed!important;inset:0!important;display:flex!important;flex-direction:column!important;align-items:center!important;width:100%!important;height:100vh!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:max(32px,calc((100vh - ${b.h * z}px)/2)) 24px!important;gap:40px!important;box-sizing:border-box!important;transform:none!important;overflow:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable both-edges}html[data-editor-scrolling] [data-artboard]{display:block!important;flex-shrink:0!important;margin:0!important;zoom:${z}!important;box-shadow:none!important}}`;
+      workspace.draw(bounds());
       draw();
       return;
     }
@@ -49,6 +57,9 @@ export function createViewport({
     const x = v.x + (v.w - b.w * z) / 2 + pan.x,
       y = v.y + (v.h - b.h * z) / 2 + pan.y;
     style.textContent = `@media screen{html[data-editor-on] [data-stage]{position:fixed!important;inset:auto!important;left:${x}px!important;top:${y}px!important;display:block!important;width:${b.w}px!important;height:${b.h}px!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;gap:0!important;transform-origin:0 0!important;transform:scale(${z})!important;overflow:visible!important}html[data-editor-on] [data-artboard]{margin:0!important;box-shadow:none!important}}`;
+    if (workspace.active()) style.textContent += `@media screen{${workspace.css()}html[data-editor-workspace] [data-editor-drop-target]{outline:${2/S.zoom}px solid #258bff!important;outline-offset:${4/S.zoom}px}html[data-editor-workspace] [data-editor-drag-source]{visibility:hidden!important}}`;
+    workspace.draw(v);
+    ui.querySelectorAll('.workspace-switch [data-act]').forEach(n=>n.setAttribute('aria-pressed',String((n.dataset.act==='view-workspace')===!!S.workspace)));
     ui.querySelector("[data-act=zoom-fit]").setAttribute("aria-pressed", S.fit);
     ui.querySelector(".zv").textContent = `${Math.round(z * 100)}%`;
     draw();
@@ -101,6 +112,16 @@ export function createViewport({
         ? STEPS.find((v) => v > S.zoom + 0.001)
         : [...STEPS].reverse().find((v) => v < S.zoom - 0.001);
     zoom(z ?? S.zoom);
+  }
+  function focusCurrent() {
+    if (!workspace.active() || !S.current) return refresh(true);
+    const v=bounds(), r=S.current.getBoundingClientRect();
+    pan.x+=v.x+v.w/2-(r.left+r.width/2);pan.y+=v.y+v.h/2-(r.top+r.height/2);S.fit=false;drawViewport();
+  }
+  function view(on) {
+    if (!workspace.enabled || S.playing) return;
+    if (S.drag) { S.drag.cancel?.(); S.drag=null; }
+    finishEditing('pan'); S.workspace=on;root.toggleAttribute('data-editor-workspace',on);root.toggleAttribute('data-editor-single',!on);pan={x:0,y:0};fit();
   }
   function refresh(center = false) {
     if (S.fit) fit();
@@ -333,7 +354,8 @@ export function createViewport({
           x: e.clientX,
           y: e.clientY,
         });
-      } else if (!S.fit) {
+      } else if (!S.fit || workspace.active()) {
+        S.fit = false;
         pan.x -= e.deltaX;
         pan.y -= e.deltaY;
         drawViewport();
@@ -341,5 +363,5 @@ export function createViewport({
     },
     { passive: false, capture: true },
   );
-  return { zoom, fit, step, refresh, bounds, preview, stop };
+  return { zoom, fit, step, refresh, bounds, preview, stop, workspaceActive, view, focusCurrent, boardAt:workspace.boardAt, highlight:workspace.highlight };
 }

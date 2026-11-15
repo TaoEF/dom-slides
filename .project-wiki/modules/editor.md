@@ -84,6 +84,12 @@ confidence: high
 
 修改 `src/`，运行构建与相关回归。已有文档使用 begin/commit 交接更新内嵌脚本；不能直接运行示例生成器替换用户稿件。
 
+形状入口与文字、图片并列，紧凑图标面板提供矩形、椭圆、三角形、菱形、星形、直线、线箭头和块箭头。插入结果是带唯一 `data-el` 的静态 SVG；颜色、线宽和可用几何参数写在该元素的 `data-shape-*` 属性中，SVG 子节点同步写入保存的 DOM。参数修改进入普通撤销历史，保存重开无需脚本重建。该入口不改变其他自带 SVG 的语义。
+
+形状参数在 `input` 阶段实时预览，在 `change`/失焦时合并为一次撤销；撤销、保存、离开编辑与 AI 交接前会先结束进行中的参数调整。新形状默认填充/描边为中性灰，填充形状的描边线宽为 2；已有线宽为 0 的形状若直接改描边色，会同时将线宽设为 2，避免颜色改变不可见。形状入口和弹层使用仅图标的轮廓样式；填充与描边颜色沿用文字工具的圆形色样，描边以圆环区分。线宽与文字字号共用深灰数值步进组件，均可输入或点击上下箭头。旋转入口与手柄使用 Lucide `RotateCwSquare`，与图片替换的 `RefreshCw` 区分。各入口保留悬停提示和无障碍名称。新插入常规形状的实际绘制区域贴近选择框边界，非等比拉伸仍铺满画框；直线保留可操作的最小高度。
+
+形状 SVG 的视框使用元素实际设计尺寸；拖动尺寸时重算静态子节点几何，线宽和圆角保持设计像素值，画布整体缩放时仍同比缩放。形状尺寸与子节点一起进入撤销快照。矩形、三角形、菱形、星形、块箭头有独立 `data-shape-radius`（0–50）；多边形使用带曲线的填充路径，旧矩形缺少该属性时继续从 `data-shape-adjust` 读取圆角。顶部保留圆角，星形与箭头的其他几何调整位于元素右键菜单。AI 生成形状应调用 `html-design/src/shapes.js` 的纯函数 `shapeMarkup({id,kind,fill,stroke,strokeWidth,radius,adjust,width,height})`，它一次产出数据属性、物理尺寸、视框与 SVG 子节点；只写 `data-shape-*` 而不更新子节点不会改变离线显示。参数范围：`strokeWidth` 0–16、`radius/adjust` 0–50，`width/height` 至少 8px。描边色圆环内部透明。形状沿用编辑器旋转手柄；PPTX 原生映射保留旋转角度与局部尺寸，矩形圆角依据真实 SVG 视框换算，兼容旧 200×120 形状；其他形状的圆角在 PPTX 中提示可能丢失。
+
 
 ## 文字测量与适配边界
 
@@ -164,3 +170,12 @@ Ctrl/⌘ G、Shift G与菜单共用组合/取消动作及写权限守卫；Ctrl/
 Issue36在预览页面菜单增加画布尺寸，页级CSS border-box px，保留box-sizing。预设和自定义只作用当前页；已有响应式内容自然布局，不整体缩放。通过页面管理租约和单步历史保存原style（含缺失）；冲突CSS回滚。尺寸输入草稿阻止外部接管，确认走同一输入保护；复制显式保留源尺寸。artboard-size.js供UI与Runtime复用。Chrome CSSOM设置后removeAttribute可能留下空style，回滚先显式设置原字符串再移除缺失状态。
 
 唯一审查修复：复制尺寸必须用setProperty保留原inline !important；只显示当前页时，复制页的尺寸校验必须在withAll中测量。
+## Editable workspace prototype (#37, opt-in branch)
+
+用户反馈将#37原型重点改为编辑与跨画布复用，保留原缩略图导航。独立workspace-view.js只用editor style投影自动排布，不写frame坐标；viewport统一zoom/pan/fit，原Editor/Edit/Done/thumbnail/page/history/persistence保留。data-workspace-prototype仅为独立样例opt-in；非opt-in文件维持原行为，不代表main已发布。
+
+workspace-transfer.js保存临时手势/剪贴板快照：同页逻辑roots跨frame移动保留ID，Alt复制与带内部MIME标识的C/V重新键控ID；typing/外部图片粘贴沿原入口。只有被迁移对象固定computed样式并按落点绝对定位，不拆其他页面；支持正向均匀2D几何，无生成内容，目标结构/样式/几何不等价时拒绝恢复。移动Undo恢复父/次序/属性，复制Undo移除原clone，Redo保留clone身份。不是完整CSS组件移植或跨frame多选。
+
+原型视图坐标、labels、ghost和drop attrs不进序列化/导出；HTML/CSS/DOM继续是真值。旧只读原型保留，新建workspace-editor.html；活跃新稿仍通过begin/commit升级，不直接重建。技术边界与用例见prototypes/README.md和harness实现计划。
+
+跨画布样式冲突不能只检查根框宽高：目标 CSS 的独立 rotate 可能改变方向，后代 display/visibility 可能隐藏富文本但不改变根框。原型转移需同时检查归一化角度、可见性/显示方式和已渲染子树边界；不一致整体回滚（移动和复制均覆盖）。

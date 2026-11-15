@@ -420,6 +420,86 @@ property of their respective owners.
     return [...group.children].map(groupStructureProblem).find(Boolean) || null;
   }
 
+  // html-design/src/selection.js
+  function selectionRoots(nodes) {
+    const unique = [...new Set(nodes)].filter((n) => n?.isConnected);
+    return unique.filter(
+      (n) => !unique.some((other) => other !== n && other.contains(n))
+    );
+  }
+  function unionRect(nodes) {
+    const rects = nodes.map(objectRect);
+    const left = Math.min(...rects.map((r) => r.left)), top = Math.min(...rects.map((r) => r.top));
+    const right = Math.max(...rects.map((r) => r.right)), bottom = Math.max(...rects.map((r) => r.bottom));
+    return {
+      left,
+      top,
+      right,
+      bottom,
+      width: right - left,
+      height: bottom - top
+    };
+  }
+  function selectable(board, context = null) {
+    return [...new Set([...(context || board).querySelectorAll("[data-el]")].map((n) => logicalTarget(n, context)))].filter((n) => {
+      if (!n) return false;
+      const r = objectRect(n), s = getComputedStyle(n);
+      return n.closest("[data-artboard]") === board && r.width > 0 && r.height > 0 && s.visibility === "visible" && s.opacity !== "0";
+    });
+  }
+  function directionTarget(nodes, board, key, context = null) {
+    const selected = selectionRoots(nodes);
+    if (!selected.length) return null;
+    const from = objectRect(selected.at(-1));
+    const x = from.left + from.width / 2, y = from.top + from.height / 2;
+    const horizontal = ["ArrowLeft", "ArrowRight"].includes(key), sign = ["ArrowLeft", "ArrowUp"].includes(key) ? -1 : 1;
+    let best = null;
+    for (const node of selectable(board, context)) {
+      if (selected.some((n) => n === node || n.contains(node) || node.contains(n)))
+        continue;
+      const r = objectRect(node), dx = r.left + r.width / 2 - x, dy = r.top + r.height / 2 - y;
+      const forward = (horizontal ? dx : dy) * sign, cross = Math.abs(horizontal ? dy : dx);
+      if (forward <= 1) continue;
+      const score = forward + cross * 2;
+      if (!best || score < best.score) best = { node, score };
+    }
+    return best?.node || null;
+  }
+  function createSelectionOverlay(ui) {
+    const members = document.createElement("div"), marquee = document.createElement("div");
+    members.className = "selection-members";
+    marquee.className = "marquee";
+    marquee.hidden = true;
+    ui.append(members, marquee);
+    return {
+      draw(nodes) {
+        members.replaceChildren();
+        if (nodes.length < 2) return;
+        for (const node of nodes) {
+          const r = objectRect(node), frame = document.createElement("div");
+          frame.className = "selection-member";
+          Object.assign(frame.style, {
+            left: r.left + "px",
+            top: r.top + "px",
+            width: r.width + "px",
+            height: r.height + "px"
+          });
+          members.append(frame);
+        }
+      },
+      marquee(rect) {
+        marquee.hidden = !rect;
+        if (rect)
+          Object.assign(marquee.style, {
+            left: rect.left + "px",
+            top: rect.top + "px",
+            width: rect.width + "px",
+            height: rect.height + "px"
+          });
+      }
+    };
+  }
+
   // html-design/src/oriented-selection.js
   var GROUP_ANGLE = "data-group-angle-v1";
   var sameSelection = (a, b) => a.length === b.length && a.every((n) => b.includes(n));
@@ -473,6 +553,434 @@ property of their respective owners.
   function resizeCursor(handle, angle) {
     const base = { e: 0, se: 45, s: 90, sw: 135, w: 180, nw: 225, n: 270, ne: 315 }[handle];
     return ["ew-resize", "nwse-resize", "ns-resize", "nesw-resize"][(Math.round((base + angle) / 45) % 4 + 4) % 4];
+  }
+
+  // html-design/src/identifiers.js
+  function rekeyDOMIds(tree, prefix) {
+    const all = [tree, ...tree.querySelectorAll("*")], ids = /* @__PURE__ */ new Map();
+    for (const node of all)
+      if (node.id) {
+        const old = node.id;
+        node.id = `${prefix}-${old}`;
+        ids.set(old, node.id);
+      }
+    const ordered = [...ids].sort((a, b) => b[0].length - a[0].length);
+    for (const node of all) {
+      for (const attr of [...node.attributes]) {
+        if (["id", "src", "srcset"].includes(attr.name)) continue;
+        let value = attr.value;
+        if (["for", "aria-labelledby", "aria-describedby"].includes(attr.name))
+          value = value.split(" ").map((id) => ids.get(id) || id).join(" ");
+        for (const [before, after] of ordered) {
+          value = value.replaceAll(`url(#${before})`, `url(#${after})`).replaceAll(`url("#${before}")`, `url("#${after}")`).replaceAll(`url('#${before}')`, `url('#${after}')`);
+          if (value === `#${before}`) value = `#${after}`;
+        }
+        if (value !== attr.value) node.setAttribute(attr.name, value);
+      }
+      if (node.matches("style")) {
+        let css = node.textContent;
+        for (const [before, after] of ordered)
+          css = css.replaceAll(`#${before}`, `#${after}`);
+        node.textContent = css;
+      }
+    }
+  }
+
+  // html-design/src/workspace-transfer.js
+  function createWorkspaceTransfer({
+    S,
+    stage,
+    ui,
+    viewport,
+    snap,
+    apply,
+    push,
+    select,
+    activate,
+    elementId,
+    canEdit,
+    toast
+  }) {
+    const enabled = stage.hasAttribute("data-workspace-prototype");
+    let clipboard = null, ghost = null;
+    const all = (roots) => [
+      ...new Set(roots.flatMap((n) => [n, ...n.querySelectorAll("*")]))
+    ];
+    const ignored = /^(cursor|user-select|-webkit-user-select|caret-color|pointer-events|animation.*|transition.*)$/;
+    function capture(roots) {
+      roots = selectionRoots(roots);
+      if (!roots.length) throw new Error("请先选择元素");
+      if (all(roots).length > 500)
+        throw new Error("原型暂支持一次复用最多 500 个节点");
+      const bounds = unionRect(roots), zoom = S.zoom;
+      const objects = roots.map((source) => {
+        const template = source.cloneNode(true), originals = [source, ...source.querySelectorAll("*")], copies = [template, ...template.querySelectorAll("*")], pairs = new Map(originals.map((n, i) => [n, copies[i]]));
+        const ids = new Set(originals.map((n) => n.id).filter(Boolean));
+        for (const node of originals) {
+          if (node.matches("script,iframe,object,embed,video,canvas"))
+            throw new Error("这种内容暂不支持跨画布复用");
+          for (const pseudo of ["::before", "::after"])
+            if (!["none", "normal", '""'].includes(
+              getComputedStyle(node, pseudo).content
+            ))
+              throw new Error("含生成内容的对象暂不支持跨画布复用");
+          const target = pairs.get(node), cs = getComputedStyle(node);
+          target.removeAttribute("contenteditable");
+          target.removeAttribute("data-bbox");
+          target.removeAttribute("data-flow-style");
+          for (const key of cs) {
+            if (ignored.test(key)) continue;
+            let value = cs.getPropertyValue(key);
+            value = value.replace(
+              /url\(["']?[^#"')]*#([^"')]+)["']?\)/g,
+              (match, id) => ids.has(id) ? `url("#${id}")` : match
+            );
+            target.style.setProperty(
+              key,
+              value,
+              node.style.getPropertyPriority(key)
+            );
+          }
+        }
+        const leaves = groupRoots([source]).map((node) => {
+          const g = elementGeometry(node);
+          if (!g.supported) throw new Error("这种变换暂不支持跨画布复用");
+          return { source: node, copy: pairs.get(node), g };
+        });
+        for (const node of originals.filter(isGroup))
+          if (!leaves.some(
+            (leaf) => leaf.source !== node && leaf.source.contains(node)
+          )) {
+            const frame = selectionFrame([node]);
+            if (frame) writeGroupAngle(pairs.get(node), frame.angle);
+          }
+        const frames = originals.map((node) => {
+          const r = node.getBoundingClientRect();
+          return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height };
+        });
+        return { source, template, pairs, leaves, frames };
+      });
+      return {
+        objects,
+        zoom,
+        cx: bounds.left + bounds.width / 2,
+        cy: bounds.top + bounds.height / 2
+      };
+    }
+    function placements(roots) {
+      return roots.map((node) => ({
+        node,
+        parent: node.parentNode,
+        next: node.nextSibling
+      }));
+    }
+    function restore(places) {
+      for (const { node, parent, next } of [...places].reverse())
+        parent.insertBefore(node, next?.parentNode === parent ? next : null);
+    }
+    function clear() {
+      viewport.highlight(null);
+      ghost?.remove();
+      ghost = null;
+    }
+    function begin(roots) {
+      roots = selectionRoots(roots);
+      return {
+        roots,
+        before: snap(all(roots)),
+        places: placements(roots),
+        source: roots[0]?.closest("[data-artboard]")
+      };
+    }
+    function position(node, g, board, cx, cy, zoom) {
+      const r = board.getBoundingClientRect(), cs = getComputedStyle(board), scale = g.scale / zoom;
+      const set = (key, value) => node.style.setProperty(key, value, node.style.getPropertyPriority(key));
+      for (const [key, value] of Object.entries({
+        position: "absolute",
+        inset: "auto",
+        margin: "0px",
+        "box-sizing": "border-box",
+        width: `${g.w}px`,
+        height: `${g.h}px`,
+        "min-width": "0px",
+        "min-height": "0px",
+        "max-width": "none",
+        "max-height": "none",
+        translate: "none",
+        rotate: "none",
+        scale: "none",
+        zoom: "1",
+        "transform-origin": "50% 50%",
+        transform: `rotate(${g.angle}deg) scale(${scale})`,
+        left: `${(cx - r.left) / S.zoom - (parseFloat(cs.borderLeftWidth) || 0) - g.w / 2}px`,
+        top: `${(cy - r.top) / S.zoom - (parseFloat(cs.borderTopWidth) || 0) - g.h / 2}px`
+      }))
+        set(key, value);
+    }
+    function install(packet, board, { copy, center = null } = {}) {
+      const result = [], expected = [];
+      try {
+        for (const object of packet.objects) {
+          const node = copy ? object.template.cloneNode(true) : object.source;
+          const templates = [
+            object.template,
+            ...object.template.querySelectorAll("*")
+          ], nodes = [node, ...node.querySelectorAll("*")];
+          if (!copy)
+            for (let i = 0; i < nodes.length; i++) {
+              const value = templates[i].getAttribute("style");
+              nodes[i].setAttribute("style", value || "");
+              nodes[i].removeAttribute("data-flow-style");
+              nodes[i].removeAttribute("data-bbox");
+              if (templates[i].hasAttribute("data-group-angle-v1"))
+                nodes[i].setAttribute(
+                  "data-group-angle-v1",
+                  templates[i].getAttribute("data-group-angle-v1")
+                );
+            }
+          if (copy) {
+            for (const child of nodes.filter((n) => n.hasAttribute("data-el")))
+              child.dataset.el = elementId(board, "copy");
+            rekeyDOMIds(node, node.dataset.el);
+          }
+          board.append(node);
+          result.push(node);
+          for (const leaf of object.leaves) {
+            const index = templates.indexOf(leaf.copy), target = nodes[index];
+            const cx = center ? center.x + (leaf.g.cx - packet.cx) / packet.zoom * S.zoom : leaf.g.cx, cy = center ? center.y + (leaf.g.cy - packet.cy) / packet.zoom * S.zoom : leaf.g.cy;
+            position(target, leaf.g, board, cx, cy, packet.zoom);
+            expected.push({ node: target, cx, cy, g: leaf.g });
+          }
+        }
+        if (!stableGroupMarkup(board))
+          throw new Error("目标容器无法保留这个对象的 HTML 结构，本次已保留原样");
+        const visual = [
+          "display",
+          "visibility",
+          "content-visibility",
+          "color",
+          "font-family",
+          "font-size",
+          "font-style",
+          "font-weight",
+          "line-height",
+          "letter-spacing",
+          "word-spacing",
+          "text-align",
+          "text-transform",
+          "white-space",
+          "background-color",
+          "opacity",
+          "object-fit",
+          "object-position",
+          "box-shadow"
+        ];
+        for (let i = 0; i < result.length; i++) {
+          const templates = [
+            packet.objects[i].template,
+            ...packet.objects[i].template.querySelectorAll("*")
+          ], nodes = [result[i], ...result[i].querySelectorAll("*")];
+          for (let j = 0; j < nodes.length; j++)
+            for (const key of visual) {
+              const wanted = templates[j].style.getPropertyValue(key);
+              const actual = getComputedStyle(nodes[j]).getPropertyValue(key);
+              const blockified = key === "display" && actual === "block" && wanted === "inline" && packet.objects[i].leaves.some((l) => l.copy === templates[j]);
+              if (wanted && actual !== wanted && !blockified)
+                throw new Error("目标画布的 CSS 改变了对象样式，本次已保留原样");
+            }
+        }
+        for (let i = 0; i < result.length; i++) {
+          const nodes = [result[i], ...result[i].querySelectorAll("*")];
+          const k = S.zoom / packet.zoom;
+          for (let j = 0; j < nodes.length; j++) {
+            const before = packet.objects[i].frames[j];
+            if (!before.w && !before.h) continue;
+            const r = nodes[j].getBoundingClientRect();
+            const cx = center ? center.x + (before.cx - packet.cx) * k : before.cx;
+            const cy = center ? center.y + (before.cy - packet.cy) * k : before.cy;
+            if (Math.abs(r.left + r.width / 2 - cx) > 1 || Math.abs(r.top + r.height / 2 - cy) > 1 || Math.abs(r.width - before.w * k) > 1 || Math.abs(r.height - before.h * k) > 1)
+              throw new Error("目标画布改变了对象内部布局，本次已保留原样");
+          }
+        }
+        for (const item of expected) {
+          const g = elementGeometry(item.node), k = S.zoom / packet.zoom;
+          if (!g.supported || Math.abs(((g.angle - item.g.angle + 180) % 360 + 360) % 360 - 180) > 0.01 || Math.abs(g.cx - item.cx) > 1 || Math.abs(g.cy - item.cy) > 1 || Math.abs(g.w * g.scale - item.g.w * item.g.scale * k) > 1 || Math.abs(g.h * g.scale - item.g.h * item.g.scale * k) > 1)
+            throw new Error("目标画布的 CSS 限制了位置或尺寸，本次已保留原样");
+        }
+        return result;
+      } catch (error) {
+        if (copy) result.forEach((n) => n.remove());
+        throw error;
+      }
+    }
+    function drop(context, event) {
+      clear();
+      if (!enabled || !viewport.workspaceActive() || !event) return false;
+      if (!canEdit()) {
+        apply(context.before);
+        activate(context.source);
+        select(context.roots, true);
+        return true;
+      }
+      const board = viewport.boardAt(event.clientX, event.clientY);
+      if (!board) {
+        apply(context.before);
+        activate(context.source);
+        select(context.roots, true);
+        toast("请拖到画布内，本次已恢复原位置");
+        return true;
+      }
+      if (board === context.source) return false;
+      let inserted = [];
+      const copy = !!event.altKey;
+      try {
+        const packet = capture(context.roots);
+        if (copy) apply(context.before);
+        inserted = install(packet, board, { copy });
+        const after = snap(all(inserted));
+        push({
+          board,
+          undo() {
+            if (copy) inserted.forEach((n) => n.remove());
+            else {
+              restore(context.places);
+              apply(context.before);
+            }
+            activate(context.source, true);
+            select(copy ? context.roots : inserted, true);
+          },
+          redo() {
+            inserted.forEach((n) => board.append(n));
+            apply(after);
+            activate(board, true);
+            select(inserted, true);
+          }
+        });
+        activate(board);
+        select(inserted, true);
+        toast(copy ? "已复制到此画布 · 可撤销" : "已移动到此画布 · 可撤销");
+        return true;
+      } catch (error) {
+        if (copy) for (const n of inserted) n.remove();
+        else restore(context.places);
+        apply(context.before);
+        activate(context.source);
+        select(context.roots, true);
+        toast(error.message, 4500);
+        return true;
+      }
+    }
+    function move(context, event) {
+      if (!enabled || !viewport.workspaceActive()) return;
+      const board = viewport.boardAt(event.clientX, event.clientY);
+      viewport.highlight(board && board !== context.source ? board : null);
+      const r = context.source?.getBoundingClientRect(), outside = r && (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom);
+      if (!outside) {
+        ghost?.remove();
+        ghost = null;
+        return;
+      }
+      if (!ghost) {
+        try {
+          const packet = capture(context.roots);
+          ghost = document.createElement("div");
+          ghost.className = "workspace-ghost";
+          for (const object of packet.objects)
+            for (const leaf of object.leaves) {
+              const clone = leaf.copy.cloneNode(true);
+              for (const n of [clone, ...clone.querySelectorAll("*")]) {
+                for (const a of [...n.attributes])
+                  if (/^on/i.test(a.name)) n.removeAttribute(a.name);
+                n.style.setProperty("pointer-events", "none", "important");
+              }
+              ghost.append(clone);
+            }
+          ui.append(ghost);
+          ghost._sources = packet.objects.flatMap(
+            (o) => o.leaves.map((l) => l.source)
+          );
+        } catch {
+          return;
+        }
+      }
+      [...ghost.children].forEach((node, i) => {
+        const g = elementGeometry(ghost._sources[i]);
+        Object.assign(node.style, {
+          position: "fixed",
+          margin: "0",
+          boxSizing: "border-box",
+          width: `${g.w}px`,
+          height: `${g.h}px`,
+          left: `${g.cx - g.w / 2}px`,
+          top: `${g.cy - g.h / 2}px`,
+          inset: "auto",
+          translate: "none",
+          rotate: "none",
+          scale: "none",
+          zoom: "1",
+          transformOrigin: "50% 50%",
+          transform: `rotate(${g.angle}deg) scale(${g.scale})`
+        });
+        node.style.left = `${g.cx - g.w / 2}px`;
+        node.style.top = `${g.cy - g.h / 2}px`;
+      });
+    }
+    function copyEvent(event) {
+      if (!enabled || !canEdit() || !S.selection.length || S.text) return false;
+      try {
+        const packet = capture(S.selection), token = crypto.getRandomValues(new Uint32Array(4)).join("-");
+        clipboard = { packet, token };
+        event.clipboardData.setData("application/x-dom-slides-objects", token);
+        event.clipboardData.setData(
+          "text/plain",
+          S.selection.map((n) => n.textContent).join("\n")
+        );
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        toast("已复制元素 · 可粘贴到其他画布");
+        return true;
+      } catch (error) {
+        toast(error.message, 4500);
+        return false;
+      }
+    }
+    function pasteEvent(event) {
+      if (!enabled || !canEdit() || S.text || !clipboard || event.clipboardData?.getData("application/x-dom-slides-objects") !== clipboard.token)
+        return false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const board = S.current;
+      if (!board) return true;
+      let inserted = [];
+      try {
+        const r = board.getBoundingClientRect();
+        inserted = install(clipboard.packet, board, {
+          copy: true,
+          center: { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+        });
+        const after = snap(all(inserted));
+        push({
+          board,
+          undo() {
+            inserted.forEach((n) => n.remove());
+            select(null);
+          },
+          redo() {
+            inserted.forEach((n) => board.append(n));
+            apply(after);
+            activate(board, true);
+            select(inserted, true);
+          }
+        });
+        select(inserted);
+        toast("已粘贴到当前画布 · 可撤销");
+      } catch (error) {
+        inserted.forEach((n) => n.remove());
+        toast(error.message, 4500);
+      }
+      return true;
+    }
+    return { enabled, begin, move, drop, clear, copyEvent, pasteEvent };
   }
 
   // html-design/src/crop-geometry.js
@@ -841,90 +1349,93 @@ property of their respective owners.
   }
 
   // html-design/src/editor.css
-  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-main:hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.thumb-main:focus-visible .frame {\n  outline: 2px solid var(--selection);\n  outline-offset: 3px;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.tbar .fs {\n  width: 52px;\n  height: 29px;\n  background: #383838;\n  border: 0;\n  border-radius: 5px;\n  padding: 0 4px;\n  text-align: center;\n  font-variant-numeric: tabular-nums;\n  appearance: textfield;\n}\n.fs::-webkit-inner-spin-button {\n  appearance: none;\n}\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; }\n.color-control:hover { background:var(--hover); }\n.color-control input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }\n.color-control .color-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap: 0; width: 36px; }\n.add-text .icon:first-child { width: 12px; height: 12px; }\n.add-text .icon:last-child { width: 17px; height: 17px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-scope { color:var(--muted); font-size:12px; padding:0 8px; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n\n.page-size-dialog{position:fixed;inset:0;z-index:2147483647;background:#0005;display:grid;place-items:center;padding:16px;color:#202020;font:13px/1.5 system-ui,sans-serif}\n.size-box{width:min(360px,100%);box-sizing:border-box;background:#fff;border-radius:12px;padding:22px}\n.size-heading,.size-fields,.size-actions{display:flex;align-items:center;gap:12px}.size-heading h2{font-size:17px;margin:0;flex:1}.size-close{padding:0;width:28px}.size-page{color:#646464;margin:4px 0 20px}.size-box label{display:block;flex:1;min-width:0}.size-box select,.size-box input{box-sizing:border-box;width:100%;margin:6px 0 16px;padding:9px 10px;background:#f2f2f2;border:0;border-radius:6px;color:#202020;font:inherit}.size-fields label{position:relative}.size-fields input{padding-right:30px}.size-fields span{position:absolute;right:10px;top:35px;color:#646464}.size-note{font-size:12px;color:#646464;margin:0 0 20px}.size-error{font-size:12px;color:#b42318}.size-actions{justify-content:flex-end}.size-actions button{padding-inline:14px}.size-box :focus-visible{outline:2px solid #258bff;outline-offset:2px}\n';
+  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-main:hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.thumb-main:focus-visible .frame {\n  outline: 2px solid var(--selection);\n  outline-offset: 3px;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch, .tbar .color-control .shape-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.text-tools .number-stepper { width: 64px; }\n.text-tools .number-stepper input { width: 47px; font-size: 14px; }\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; }\n.color-control:hover { background:var(--hover); }\n.color-control input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }\n.color-control .color-swatch, .color-control .shape-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap: 0; width: 36px; }\n.add-text .icon:first-child { width: 12px; height: 12px; }\n.add-text .icon:last-child { width: 17px; height: 17px; }\n.add-shape { gap: 0; width: 36px; }\n.add-shape .icon:first-child { width: 17px; height: 17px; }\n.add-shape .icon:last-child { width: 10px; height: 10px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.shape-palette { display: grid; grid-template-columns: repeat(4, 42px); gap: 4px; min-width: 0; padding: 8px; }\n.shape-palette[hidden] { display: none; }\n.shape-palette button { width: 42px; height: 42px; padding: 9px; justify-content: center; }\n.shape-palette svg { width: 24px; height: 24px; }\n.shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }\n.shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }\n.shape-stroke-color .shape-swatch { background: transparent; border: 3px solid currentColor; }\n.shape-width-control { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }\n.number-stepper { display: inline-flex; align-items: center; height: 29px; width: 52px; border-radius: 5px; background: #383838; }\n.number-stepper input { width: 35px; min-width: 0; height: 27px; border: 0; padding: 0 2px; outline: 0; background: transparent; color: #fff; text-align: center; appearance: textfield; font-variant-numeric: tabular-nums; }\n.number-stepper input::-webkit-inner-spin-button { appearance: none; }\n.number-steps { display: flex; flex-direction: column; width: 15px; height: 27px; }\n.number-steps button { width: 15px; min-width: 15px; height: 13px; min-height: 13px; padding: 0; border-radius: 2px; color: #c9c9cc; }\n.number-steps button .icon { width: 10px; height: 10px; }\n.shape-radius input, .shape-adjust input { width: 82px; accent-color: #c9c9cc; }\n.shape-more-section[hidden] { display: none; }\n.shape-more-section .shape-adjust { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; font-size: 12px; }\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n    gap: 2px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .tools { gap: 0; }\n  .head .layout-toggle { margin-inline: 0; }\n  .head .layout-toggle button { padding-inline: 3px; font-size: 10px; }\n  .head .tools > [data-act="add-text"],\n  .head .tools > [data-act="add-image"],\n  .head .tools > [data-act="add-shape"] { width: 27px; min-width: 27px; padding: 0; }\n  .head .add-shape .icon:last-child { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-scope { color:var(--muted); font-size:12px; padding:0 8px; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n\n.page-size-dialog{position:fixed;inset:0;z-index:2147483647;background:#0005;display:grid;place-items:center;padding:16px;color:#202020;font:13px/1.5 system-ui,sans-serif}\n.size-box{width:min(360px,100%);box-sizing:border-box;background:#fff;border-radius:12px;padding:22px}\n.size-heading,.size-fields,.size-actions{display:flex;align-items:center;gap:12px}.size-heading h2{font-size:17px;margin:0;flex:1}.size-close{padding:0;width:28px}.size-page{color:#646464;margin:4px 0 20px}.size-box label{display:block;flex:1;min-width:0}.size-box select,.size-box input{box-sizing:border-box;width:100%;margin:6px 0 16px;padding:9px 10px;background:#f2f2f2;border:0;border-radius:6px;color:#202020;font:inherit}.size-fields label{position:relative}.size-fields input{padding-right:30px}.size-fields span{position:absolute;right:10px;top:35px;color:#646464}.size-note{font-size:12px;color:#646464;margin:0 0 20px}.size-error{font-size:12px;color:#b42318}.size-actions{justify-content:flex-end}.size-actions button{padding-inline:14px}.size-box :focus-visible{outline:2px solid #258bff;outline-offset:2px}\n.workspace-switch{flex-shrink:0;margin-inline:auto;background:#e8e8e8}.workspace-switch button{font-size:12px;padding:4px 9px;min-width:0}.workspace-switch [aria-pressed=true]{background:#fff;color:#202020}.workspace-label{position:fixed;height:24px;min-height:24px;justify-content:flex-start;padding:0;background:transparent;font-size:11px;color:#646464;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:auto}.workspace-label:hover{background:transparent;color:#202020}.workspace-ghost{position:fixed;inset:0;pointer-events:none;z-index:2147483641}.workspace-ghost *{pointer-events:none!important}.workspace-labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}\n@media(max-width:760px){:host([data-workspace-enabled]) .page-title{display:none}:host([data-workspace-enabled]) .footer{gap:2px}:host([data-workspace-enabled]) .workspace-switch button{padding-inline:6px;font-size:11px}}\n';
 
-  // node_modules/lucide/dist/esm/icons/arrow-down.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/arrow-down.mjs
   var ArrowDown = [
     ["path", { d: "M12 5v14" }],
     ["path", { d: "m19 12-7 7-7-7" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/arrow-up.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/arrow-up.mjs
   var ArrowUp = [
     ["path", { d: "m5 12 7-7 7 7" }],
     ["path", { d: "M12 19V5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/bold.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/bold.mjs
   var Bold = [
     ["path", { d: "M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/bring-to-front.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/bring-to-front.mjs
   var BringToFront = [
     ["rect", { x: "8", y: "8", width: "8", height: "8", rx: "2" }],
     ["path", { d: "M4 10a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2" }],
     ["path", { d: "M14 20a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/check-check.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/check-check.mjs
   var CheckCheck = [
     ["path", { d: "M18 6 7 17l-5-5" }],
     ["path", { d: "m22 10-7.5 7.5L13 16" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/check.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/check.mjs
   var Check = [["path", { d: "M20 6 9 17l-5-5" }]];
 
-  // node_modules/lucide/dist/esm/icons/chevron-down.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/chevron-down.mjs
   var ChevronDown = [["path", { d: "m6 9 6 6 6-6" }]];
 
-  // node_modules/lucide/dist/esm/icons/chevron-left.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/chevron-left.mjs
   var ChevronLeft = [["path", { d: "m15 18-6-6 6-6" }]];
 
-  // node_modules/lucide/dist/esm/icons/chevron-right.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/chevron-right.mjs
   var ChevronRight = [["path", { d: "m9 18 6-6-6-6" }]];
 
-  // node_modules/lucide/dist/esm/icons/circle-alert.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/chevron-up.mjs
+  var ChevronUp = [["path", { d: "m18 15-6-6-6 6" }]];
+
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/circle-alert.mjs
   var CircleAlert = [
     ["circle", { cx: "12", cy: "12", r: "10" }],
     ["line", { x1: "12", x2: "12", y1: "8", y2: "12" }],
     ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/code.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/code.mjs
   var Code = [
     ["path", { d: "m16 18 6-6-6-6" }],
     ["path", { d: "m8 6-6 6 6 6" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/copy.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/copy.mjs
   var Copy = [
     ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2" }],
     ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/crop.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/crop.mjs
   var Crop = [
     ["path", { d: "M6 2v14a2 2 0 0 0 2 2h14" }],
     ["path", { d: "M18 22V8a2 2 0 0 0-2-2H2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/download.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/download.mjs
   var Download = [
     ["path", { d: "M12 15V3" }],
     ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }],
     ["path", { d: "m7 10 5 5 5-5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/ellipsis.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/ellipsis.mjs
   var Ellipsis = [
     ["circle", { cx: "12", cy: "12", r: "1" }],
     ["circle", { cx: "19", cy: "12", r: "1" }],
     ["circle", { cx: "5", cy: "12", r: "1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/file-text.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/file-text.mjs
   var FileText = [
     [
       "path",
@@ -938,7 +1449,7 @@ property of their respective owners.
     ["path", { d: "M16 17H8" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/grip-vertical.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/grip-vertical.mjs
   var GripVertical = [
     ["circle", { cx: "9", cy: "12", r: "1" }],
     ["circle", { cx: "9", cy: "5", r: "1" }],
@@ -948,7 +1459,7 @@ property of their respective owners.
     ["circle", { cx: "15", cy: "19", r: "1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/group.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/group.mjs
   var Group = [
     ["path", { d: "M3 7V5c0-1.1.9-2 2-2h2" }],
     ["path", { d: "M17 3h2c1.1 0 2 .9 2 2v2" }],
@@ -958,7 +1469,7 @@ property of their respective owners.
     ["rect", { width: "7", height: "5", x: "10", y: "12", rx: "1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/image-plus.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/image-plus.mjs
   var ImagePlus = [
     ["path", { d: "M16 5h6" }],
     ["path", { d: "M19 2v6" }],
@@ -967,20 +1478,20 @@ property of their respective owners.
     ["circle", { cx: "9", cy: "9", r: "2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/italic.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/italic.mjs
   var Italic = [
     ["line", { x1: "19", x2: "10", y1: "4", y2: "4" }],
     ["line", { x1: "14", x2: "5", y1: "20", y2: "20" }],
     ["line", { x1: "15", x2: "9", y1: "4", y2: "20" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/lock.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/lock.mjs
   var Lock = [
     ["rect", { width: "18", height: "11", x: "3", y: "11", rx: "2", ry: "2" }],
     ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/maximize.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/maximize.mjs
   var Maximize = [
     ["path", { d: "M8 3H5a2 2 0 0 0-2 2v3" }],
     ["path", { d: "M21 8V5a2 2 0 0 0-2-2h-3" }],
@@ -988,7 +1499,7 @@ property of their respective owners.
     ["path", { d: "M16 21h3a2 2 0 0 0 2-2v-3" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/minimize.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/minimize.mjs
   var Minimize = [
     ["path", { d: "M8 3v3a2 2 0 0 1-2 2H3" }],
     ["path", { d: "M21 8h-3a2 2 0 0 1-2-2V3" }],
@@ -996,10 +1507,10 @@ property of their respective owners.
     ["path", { d: "M16 21v-3a2 2 0 0 1 2-2h3" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/minus.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/minus.mjs
   var Minus = [["path", { d: "M5 12h14" }]];
 
-  // node_modules/lucide/dist/esm/icons/mouse-pointer-2.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/mouse-pointer-2.mjs
   var MousePointer2 = [
     [
       "path",
@@ -1009,13 +1520,13 @@ property of their respective owners.
     ]
   ];
 
-  // node_modules/lucide/dist/esm/icons/panel-left.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/panel-left.mjs
   var PanelLeft = [
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
     ["path", { d: "M9 3v18" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/pencil.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/pencil.mjs
   var Pencil = [
     [
       "path",
@@ -1026,7 +1537,7 @@ property of their respective owners.
     ["path", { d: "m15 5 4 4" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/play.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/play.mjs
   var Play = [
     [
       "path",
@@ -1034,33 +1545,33 @@ property of their respective owners.
     ]
   ];
 
-  // node_modules/lucide/dist/esm/icons/plus.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/plus.mjs
   var Plus = [
     ["path", { d: "M5 12h14" }],
     ["path", { d: "M12 5v14" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/presentation.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/presentation.mjs
   var Presentation = [
     ["path", { d: "M2 3h20" }],
     ["path", { d: "M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3" }],
     ["path", { d: "m7 21 5-5 5 5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/printer.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/printer.mjs
   var Printer = [
     ["path", { d: "M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" }],
     ["path", { d: "M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6" }],
     ["rect", { x: "6", y: "14", width: "12", height: "8", rx: "1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/redo-2.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/redo-2.mjs
   var Redo2 = [
     ["path", { d: "m15 14 5-5-5-5" }],
     ["path", { d: "M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/refresh-cw.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/refresh-cw.mjs
   var RefreshCw = [
     ["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" }],
     ["path", { d: "M21 3v5h-5" }],
@@ -1068,20 +1579,21 @@ property of their respective owners.
     ["path", { d: "M8 16H3v5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/rotate-cw.mjs
-  var RotateCw = [
-    ["path", { d: "M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" }],
-    ["path", { d: "M21 3v5h-5" }]
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/rotate-cw-square.mjs
+  var RotateCwSquare = [
+    ["path", { d: "M12 5H6a2 2 0 0 0-2 2v3" }],
+    ["path", { d: "m9 8 3-3-3-3" }],
+    ["path", { d: "M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/rows-3.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/rows-3.mjs
   var Rows3 = [
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
     ["path", { d: "M21 9H3" }],
     ["path", { d: "M21 15H3" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/save.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/save.mjs
   var Save = [
     [
       "path",
@@ -1093,7 +1605,7 @@ property of their respective owners.
     ["path", { d: "M7 3v4a1 1 0 0 0 1 1h7" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/scan.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/scan.mjs
   var Scan = [
     ["path", { d: "M3 7V5a2 2 0 0 1 2-2h2" }],
     ["path", { d: "M17 3h2a2 2 0 0 1 2 2v2" }],
@@ -1101,7 +1613,7 @@ property of their respective owners.
     ["path", { d: "M7 21H5a2 2 0 0 1-2-2v-2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/send-to-back.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/send-to-back.mjs
   var SendToBack = [
     ["rect", { x: "14", y: "14", width: "8", height: "8", rx: "2" }],
     ["rect", { x: "2", y: "2", width: "8", height: "8", rx: "2" }],
@@ -1109,42 +1621,45 @@ property of their respective owners.
     ["path", { d: "M14 7h1a2 2 0 0 1 2 2v1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/strikethrough.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/square.mjs
+  var Square = [["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }]];
+
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/strikethrough.mjs
   var Strikethrough = [
     ["path", { d: "M16 4H9a3 3 0 0 0-2.83 4" }],
     ["path", { d: "M14 12a4 4 0 0 1 0 8H6" }],
     ["line", { x1: "4", x2: "20", y1: "12", y2: "12" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-align-center.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/text-align-center.mjs
   var TextAlignCenter = [
     ["path", { d: "M21 5H3" }],
     ["path", { d: "M17 12H7" }],
     ["path", { d: "M19 19H5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-align-end.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/text-align-end.mjs
   var TextAlignEnd = [
     ["path", { d: "M21 5H3" }],
     ["path", { d: "M21 12H9" }],
     ["path", { d: "M21 19H7" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-align-justify.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/text-align-justify.mjs
   var TextAlignJustify = [
     ["path", { d: "M3 5h18" }],
     ["path", { d: "M3 12h18" }],
     ["path", { d: "M3 19h18" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-align-start.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/text-align-start.mjs
   var TextAlignStart = [
     ["path", { d: "M21 5H3" }],
     ["path", { d: "M15 12H3" }],
     ["path", { d: "M17 19H3" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-cursor-input.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/text-cursor-input.mjs
   var TextCursorInput = [
     ["path", { d: "M12 20h-1a2 2 0 0 1-2-2 2 2 0 0 1-2 2H6" }],
     ["path", { d: "M13 8h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7" }],
@@ -1153,7 +1668,7 @@ property of their respective owners.
     ["path", { d: "M9 6v12" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/trash.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/trash.mjs
   var Trash = [
     ["path", { d: "M10 11v6" }],
     ["path", { d: "M14 11v6" }],
@@ -1162,32 +1677,32 @@ property of their respective owners.
     ["path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/undo-2.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/undo-2.mjs
   var Undo2 = [
     ["path", { d: "M9 14 4 9l5-5" }],
     ["path", { d: "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/underline.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/underline.mjs
   var Underline = [
     ["path", { d: "M6 4v6a6 6 0 0 0 12 0V4" }],
     ["line", { x1: "4", x2: "20", y1: "20", y2: "20" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/type.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/type.mjs
   var Type = [
     ["path", { d: "M12 4v16" }],
     ["path", { d: "M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" }],
     ["path", { d: "M9 20h6" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/ungroup.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/ungroup.mjs
   var Ungroup = [
     ["rect", { x: "11", y: "14", width: "10", height: "7", rx: "2" }],
     ["rect", { x: "3", y: "3", width: "10", height: "7", rx: "2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/x.mjs
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/lucide/dist/esm/icons/x.mjs
   var X = [
     ["path", { d: "M18 6 6 18" }],
     ["path", { d: "m6 6 12 12" }]
@@ -1201,6 +1716,7 @@ property of their respective owners.
     Pencil,
     Type,
     ImagePlus,
+    Square,
     PanelLeft,
     PanelsTopBottom: Rows3,
     Play,
@@ -1209,6 +1725,7 @@ property of their respective owners.
     ChevronLeft,
     ChevronRight,
     ChevronDown,
+    ChevronUp,
     Plus,
     Minus,
     Ellipsis,
@@ -1242,7 +1759,7 @@ property of their respective owners.
     GripVertical,
     TextCursorInput,
     CheckCheck,
-    RotateCw,
+    RotateCwSquare,
     Group,
     Ungroup
   };
@@ -1592,7 +2109,22 @@ property of their respective owners.
   }
 
   // html-design/src/ui.js
-  function toolbarHTML({ HANDLES }) {
+  var shapeIcons = {
+    rect: '<rect x="3" y="5" width="18" height="14" rx="2"/>',
+    ellipse: '<ellipse cx="12" cy="12" rx="9" ry="7"/>',
+    triangle: '<path d="M12 3 22 20H2Z"/>',
+    diamond: '<path d="M12 2 22 12 12 22 2 12Z"/>',
+    star: '<path d="m12 2 2.9 6.6 7.1.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7L2 9.3l7.1-.7Z"/>',
+    line: '<path d="M2 12h20" fill="none"/>',
+    arrow: '<path d="M2 12h20m-7-7 7 7-7 7" fill="none"/>',
+    blockArrow: '<path d="M2 8h12V3l8 9-8 9v-5H2Z"/>'
+  };
+  var shapeLabels = { rect: "矩形", ellipse: "椭圆", triangle: "三角形", diamond: "菱形", star: "星形", line: "直线", arrow: "线箭头", blockArrow: "块箭头" };
+  var shapePalette = Object.entries(shapeIcons).map(
+    ([kind, drawing]) => `<button type="button" data-act="shape-insert" data-shape-kind="${kind}" title="${shapeLabels[kind]}" aria-label="${shapeLabels[kind]}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${drawing}</svg></button>`
+  ).join("");
+  var numberStepper = (input, up, down, name) => `<div class="number-stepper">${input}<div class="number-steps"><button type="button" data-act="${up}" title="增加${name}" aria-label="增加${name}">${icon("ChevronUp")}</button><button type="button" data-act="${down}" title="减小${name}" aria-label="减小${name}">${icon("ChevronDown")}</button></div></div>`;
+  function toolbarHTML({ HANDLES, WORKSPACE = false }) {
     const keys = shortcutLabels(navigator.platform);
     const fmt = (cmd, name, label) => `<button type="button" data-fmt="${cmd}" title="${label}" aria-label="${label}" class="icon-only">${icon(name)}</button>`;
     return `<style>${editor_default}</style>
@@ -1601,7 +2133,7 @@ property of their respective owners.
       <button class="save-state" data-act="status" title="保存状态"><span class="state-icon">${icon("Check")}</span><span class="state-text">正在连接</span></button></div>
     <div class="grp tools" hidden>${button("undo", "Undo2", `撤销 (${keys.undo})`, { cls: "icon-only" })}${button("redo", "Redo2", `重做 (${keys.redo})`, { cls: "icon-only" })}
       <div class="seg layout-toggle" role="group" aria-label="编辑模式"><button type="button" data-act="flow" title="自动排版：保留页面原有布局" aria-pressed="true">自动排版</button><button type="button" data-act="artboard" title="手动：自由调整当前页位置" aria-pressed="false">手动</button></div>
-      <button type="button" data-act="add-text" class="icon-only add-text" title="添加文字" aria-label="添加文字">${icon("Plus")}${icon("Type")}</button>${button("add-image", "ImagePlus", "添加图片", { cls: "icon-only" })}</div>
+      <button type="button" data-act="add-text" class="icon-only add-text" title="添加文字" aria-label="添加文字">${icon("Plus")}${icon("Type")}</button>${button("add-image", "ImagePlus", "添加图片", { cls: "icon-only" })}<button type="button" data-act="add-shape" class="icon-only add-shape" title="添加形状" aria-label="添加形状" aria-expanded="false" aria-haspopup="menu">${icon("Square")}${icon("ChevronDown")}</button></div>
     <div class="grp actions">
       ${button("edit", "Pencil", "编辑画布", { text: "编辑", cls: "edit-button", attrs: 'aria-pressed="false"' })}${button("done", "Check", "完成编辑，返回画布预览", { text: "完成", cls: "done-button", attrs: "hidden" })}
       <button data-act="preview" class="preview-button" title="播放" aria-label="播放" aria-expanded="false" aria-haspopup="menu">${icon("Play")}<span>播放</span>${icon("ChevronDown")}</button>
@@ -1610,28 +2142,31 @@ property of their respective owners.
   </header>
   <aside class="nav" aria-label="页面管理"><div class="nav-head"><strong>页面</strong>${button("page-add", "Plus", "新增页面", { cls: "icon-only" })}</div><div class="thumb-list" role="list" aria-label="页面缩略图"></div></aside>
   <footer class="footer"><div class="page-controls">${button("prev", "ChevronLeft", "上一页 (PageUp / ←)", { cls: "icon-only" })}<span class="pageno"></span>${button("next", "ChevronRight", "下一页 (PageDown / →)", { cls: "icon-only" })}<button class="page-title" data-act="page-rename" title="重命名当前页面"></button></div>
+    ${WORKSPACE ? '<div class="seg workspace-switch" role="group" aria-label="画布视图"><button type="button" data-act="view-single" aria-pressed="false">单页</button><button type="button" data-act="view-workspace" aria-pressed="true">工作区</button></div>' : ""}
     <div class="zoom">${button("zoom-out", "Minus", `缩小 (${keys["zoom-out"]})`, { cls: "icon-only" })}<button data-act="zoom-reset" class="zv" title="恢复 100% (${keys["zoom-reset"]})">100%</button>${button("zoom-in", "Plus", `放大 (${keys["zoom-in"]})`, { cls: "icon-only" })}${button("zoom-fit", "Scan", `适应窗口 (${keys["zoom-fit"]})`, { cls: "fit", text: "适应" })}</div></footer>
   <div class="tbar" role="toolbar" aria-label="元素工具" hidden>
     <span class="selection-count" role="status" aria-live="polite" hidden></span>
-    <div class="text-tools"><input class="fs" type="number" min="6" max="999" aria-label="字号" title="字号，单位 px">${fmt("bold", "Bold", `加粗 (${keys.bold})`)}
+    <div class="text-tools">${numberStepper('<input class="fs" type="number" min="6" max="999" step="1" aria-label="字号" title="字号，单位 px">', "font-size-up", "font-size-down", "字号")}${fmt("bold", "Bold", `加粗 (${keys.bold})`)}
       <label class="color-control" title="文字颜色" aria-label="文字颜色"><span class="color-swatch"></span><input type="color" class="cpick" aria-label="文字颜色"></label>
       ${button("text-align", "AlignLeft", "左对齐；点击切换为居中", { cls: "icon-only text-align" })}</div>
     <div class="image-tools" hidden>${button("image-crop", "Crop", "裁切图片", { text: "裁切" })}${button("image-replace", "RefreshCw", "替换图片", { text: "替换" })}<div class="seg" role="group" aria-label="图片填充模式"><button data-act="image-fit" title="完整显示，保持比例">适应</button><button data-act="image-cover" title="裁切铺满，保持比例">填充</button></div></div>
-    <div class="object-tools">${button("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${button("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${button("group-exit", "ChevronLeft", "返回上层组合", { cls: "icon-only", attrs: "hidden" })}${button("rotation", "RotateCw", "旋转", { cls: "icon-only", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}${button("element-more", "Ellipsis", "元素操作", { cls: "icon-only", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}</div>
+    <div class="shape-tools" hidden><label class="color-control shape-color shape-fill-color" title="填充色"><span class="shape-swatch"></span><input type="color" data-shape-prop="fill" aria-label="填充色"></label><label class="color-control shape-color shape-stroke-color" title="描边色"><span class="shape-swatch"></span><input type="color" data-shape-prop="stroke" aria-label="描边色"></label><div class="shape-width-control" role="group" aria-label="线宽"><span>线宽</span>${numberStepper('<input type="number" min="0" max="16" step="1" data-shape-prop="width" aria-label="线宽">', "shape-width-up", "shape-width-down", "线宽")}</div><label class="shape-number shape-radius">圆角<input type="range" min="0" max="50" step="1" data-shape-prop="radius" aria-label="圆角"></label></div>
+    <div class="object-tools">${button("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${button("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${button("group-exit", "ChevronLeft", "返回上层组合", { cls: "icon-only", attrs: "hidden" })}${button("rotation", "RotateCwSquare", "旋转", { cls: "icon-only", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}${button("element-more", "Ellipsis", "元素操作", { cls: "icon-only", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}</div>
   </div>
   <div class="crop-source" hidden aria-hidden="true"></div>
   <section class="crop-panel" aria-label="图片裁切" hidden><div class="crop-heading"><strong>裁切</strong><span>拖动图片调整取景</span></div><div class="crop-controls"><label for="crop-zoom">缩放</label><input id="crop-zoom" class="crop-zoom" aria-label="裁切缩放" type="range" min="100" max="500" step="1"><input class="crop-zoom-value" aria-label="裁切缩放百分比" type="number" min="100" max="2000" step="1"><span>%</span></div><div class="crop-actions"><button data-act="crop-cancel">取消</button><button class="primary" data-act="crop-done">完成</button></div></section>
   <div class="sel">${HANDLES.map((h) => `<i data-h="${h}" title="${h.length === 2 ? "拖动缩放（文字角点同步缩放字号）" : "调整边界，不改变字号"}"></i>`).join("")}</div>
-  <button type="button" class="rotate-handle" aria-label="旋转选中元素" title="拖动旋转；Shift 15°步进，Alt 自由旋转" hidden>${icon("RotateCw")}</button><output class="rotation-feedback" aria-live="off" hidden></output>
-  <div class="menu-panel rotation-panel" data-menu="rotation" role="dialog" aria-label="旋转" hidden><div class="rotation-single"><label>角度 <input type="number" class="rotation-angle" step="1" aria-label="旋转角度"><span>°</span></label>${button("rotation-reset", "RotateCw", "重置旋转为0°", { text: "重置为 0°" })}</div><p class="rotation-multiple" hidden>拖动旋转手柄，以整体中心旋转。</p></div>
+  <button type="button" class="rotate-handle" aria-label="旋转选中元素" title="拖动旋转；Shift 15°步进，Alt 自由旋转" hidden>${icon("RotateCwSquare")}</button><output class="rotation-feedback" aria-live="off" hidden></output>
+  <div class="menu-panel rotation-panel" data-menu="rotation" role="dialog" aria-label="旋转" hidden><div class="rotation-single"><label>角度 <input type="number" class="rotation-angle" step="1" aria-label="旋转角度"><span>°</span></label>${button("rotation-reset", "RotateCwSquare", "重置旋转为0°", { text: "重置为 0°" })}</div><p class="rotation-multiple" hidden>拖动旋转手柄，以整体中心旋转。</p></div>
   <div class="menu-panel text-layout-panel" data-menu="text-layout" role="menu" hidden><strong>文字适配</strong><p class="text-layout-status" role="status" aria-live="polite"></p>${button("text-height", "TextCursorInput", "保持字号，按内容调整文本框高度", { text: "高度随内容" })}${button("text-fit", "Type", "保持文本框，缩小字号以完整显示（最小 6px）", { text: "缩小字号适配" })}</div>
   <div class="menu-panel" data-menu="play" role="menu" hidden>${button("scroll-play", "PanelsTopBottom", "滚动播放：上下滚动浏览全部页面", { text: "滚动播放" })}${button("fullscreen", "Maximize", "全屏播放", { text: "全屏播放" })}</div>
+  <div class="menu-panel shape-palette" data-menu="shape" role="menu" aria-label="选择形状" hidden>${shapePalette}</div>
   <div class="menu-panel pop" data-menu="export" role="menu" hidden>
     ${button("pdf", "FileText", "下载 PDF", { text: "PDF 文档" })}${button("pptx", "Presentation", "下载 PPTX（文字和图片可编辑）", { text: "PowerPoint · 可编辑" })}<div class="menu-separator"></div>
     ${button("download", "Download", "下载 HTML", { text: "下载 HTML" })}${button("copy", "Copy", "复制 HTML", { text: "复制 HTML" })}${button("print", "Printer", "浏览器打印 / PDF", { text: "打印" })}
   </div>
   <div class="menu-panel" data-menu="more" role="menu" hidden>${button("source", "Code", "查看或修改源码", { text: "源码" })}${button("save", "Save", `立即保存 (${keys.save})`, { text: "立即保存" })}<div class="menu-separator"></div>${button("help", "TextCursorInput", "快捷键与使用帮助", { text: "快捷键与帮助" })}</div>
-  <div class="menu-panel" data-menu="element" role="menu" hidden><div class="more-text-section" hidden><div class="more-text-formats" role="group" aria-label="更多文字格式">${fmt("italic", "Italic", "斜体")}${fmt("underline", "Underline", "下划线")}${fmt("strikeThrough", "Strikethrough", "删除线")}</div>${button("text-layout", "TextCursorInput", "文字适配：检测溢出、调整高度和字号", { text: "文字适配", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}<button data-fmt="removeFormat">${icon("Type")}清除文字格式</button><div class="menu-separator"></div></div>${button("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${button("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${button("group-enter", "MousePointer2", "进入组合", { text: "进入组合", attrs: "hidden" })}${button("group-exit", "ChevronLeft", "返回上层组合", { text: "返回上层", attrs: "hidden" })}${button("select-all", "MousePointer2", `全选当前页或组合 (${keys["select-all"]})`, { text: "全选" })}${button("element-duplicate", "Copy", `复制元素 (${keys["element-duplicate"]})`, { text: "复制元素" })}${button("element-front", "BringToFront", "置于顶层", { text: "置于顶层" })}${button("element-back", "SendToBack", "置于底层", { text: "置于底层" })}${button("element-delete", "Trash2", "删除元素 (Delete)", { text: "删除元素" })}</div>
+  <div class="menu-panel" data-menu="element" role="menu" hidden><div class="shape-more-section" hidden><label class="shape-adjust">形状调整 <input type="range" min="0" max="50" step="1" data-shape-prop="adjust" aria-label="形状调整"></label><div class="menu-separator"></div></div><div class="more-text-section" hidden><div class="more-text-formats" role="group" aria-label="更多文字格式">${fmt("italic", "Italic", "斜体")}${fmt("underline", "Underline", "下划线")}${fmt("strikeThrough", "Strikethrough", "删除线")}</div>${button("text-layout", "TextCursorInput", "文字适配：检测溢出、调整高度和字号", { text: "文字适配", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}<button data-fmt="removeFormat">${icon("Type")}清除文字格式</button><div class="menu-separator"></div></div>${button("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${button("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${button("group-enter", "MousePointer2", "进入组合", { text: "进入组合", attrs: "hidden" })}${button("group-exit", "ChevronLeft", "返回上层组合", { text: "返回上层", attrs: "hidden" })}${button("select-all", "MousePointer2", `全选当前页或组合 (${keys["select-all"]})`, { text: "全选" })}${button("element-duplicate", "Copy", `复制元素 (${keys["element-duplicate"]})`, { text: "复制元素" })}${button("element-front", "BringToFront", "置于顶层", { text: "置于顶层" })}${button("element-back", "SendToBack", "置于底层", { text: "置于底层" })}${button("element-delete", "Trash2", "删除元素 (Delete)", { text: "删除元素" })}</div>
   <div class="menu-panel" data-menu="page" role="menu" hidden>${button("page-add", "Plus", "在此后新增页面", { text: "新增页面" })}${button("page-copy", "Copy", "复制页面", { text: "复制页面" })}${button("page-rename", "TextCursorInput", "重命名页面", { text: "重命名" })}${button("page-size", "Maximize", "修改当前画布尺寸", { text: "画布尺寸" })}<div class="menu-separator"></div>${button("page-up", "ArrowUp", "上移页面", { text: "上移" })}${button("page-down", "ArrowDown", "下移页面", { text: "下移" })}<div class="menu-separator"></div>${button("page-delete", "Trash2", "删除页面", { text: "删除页面" })}</div>
   <div class="menu-panel status-panel" data-menu="status" role="menu" hidden><p class="status-detail"></p>${button("retry", "RefreshCw", "重试保存", { text: "重试", attrs: "hidden" })}${button("recover", "RefreshCw", "恢复未保存草稿", { text: "恢复草稿", attrs: "hidden" })}${button("conflict", "Download", "下载当前副本并同步最新文件", { text: "下载副本并同步", attrs: "hidden" })}</div>
   <div class="empty-canvas" hidden>${icon("Presentation")}<p>从第一页开始</p>${button("page-add", "Plus", "新增页面", { text: "新增页面", cls: "primary" })}</div>
@@ -1640,6 +2175,7 @@ property of their respective owners.
   <div class="help-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title" hidden><div class="box help-box"><div class="mh"><h2 id="shortcut-help-title">快捷键与帮助</h2><span class="sp"></span>${button("help-close", "X", "关闭快捷键与帮助 (Esc)", { cls: "icon-only" })}</div><div class="help-content" tabindex="0" aria-label="快捷键说明">
     <p class="help-note">画布快捷键在编辑时生效；输入文字、裁切和弹层保留各自操作。${keys.mac ? "此处显示 Mac 键位，Ctrl 组合键也可使用。" : "此处显示 Ctrl 键位。"}</p>
     ${[["选择与组合", [["全选当前页 / 组合内", keys["select-all"]], ["组合", keys.group], ["取消组合", keys.ungroup], ["增减选择", `${keys.shift} / ${keys.mod} + 单击`], ["按方向扩选", keys.extend], ["进入组 / 改字 / 裁切", "Enter / 双击"], ["取消操作 / 返回上层", "Esc"]]], ["编辑与保存", [["撤销", keys.undo], ["重做", keys.redo], ["复制对象", keys["element-duplicate"]], ["删除对象", "Delete / Backspace"], ["微调 1px / 10px", `方向键 / ${keys.shift} + 方向键`], ["保存", keys.save], ["应用源码（源码内）", keys.source]]], ["视图与手势", [["放大 / 缩小", `${keys["zoom-in"]} / ${keys["zoom-out"]}`], ["100% / 适应窗口", `${keys["zoom-reset"]} / ${keys["zoom-fit"]}`], ["平移画布", "空格 + 拖动"], ["暂停吸附", keys.alt], ["旋转 15°步进", `${keys.shift} + 旋转`], ["编辑时切页", "PageUp / PageDown"]]]].map(([title, rows]) => `<section class="help-section"><h3>${title}</h3><dl>${rows.map(([label, key]) => `<div class="help-row"><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join("")}</dl></section>`).join("")}
+    ${WORKSPACE ? '<p class="help-note">工作区编辑：拖到其他画布移动；Alt/Option 拖动复制。Ctrl/⌘ C 复制选中元素，在目标画布 Ctrl/⌘ V 粘贴。移动和复制都可一步撤销。</p>' : ""}
     <p class="help-note">空白处拖动框选，${keys.shift} + 框选追加。裁切内的撤销 / 重做使用局部历史，Enter 完成、Esc 取消。图片和文字可在元素工具条进一步调整。</p>
   </div></div></div>
   <div class="page-size-dialog" role="dialog" aria-modal="true" aria-labelledby="page-size-title" hidden><form class="size-box"><div class="size-heading"><h2 id="page-size-title">画布尺寸</h2><button type="button" class="size-close" aria-label="关闭画布尺寸">${icon("X")}</button></div><p class="size-page"></p><label>常用尺寸<select class="size-preset" aria-label="常用尺寸"><option value="custom">自定义</option><option value="1280,720">演示文稿 · 16:9</option><option value="1024,768">演示文稿 · 4:3</option><option value="1080,1080">正方形 · 1:1</option><option value="1080,1920">竖版 · 9:16</option></select></label><div class="size-fields"><label>宽度<input name="width" type="number" min="1" max="4096" step="1" required aria-label="画布宽度"><span>px</span></label><label>高度<input name="height" type="number" min="1" max="4096" step="1" required aria-label="画布高度"><span>px</span></label></div><p class="size-note">仅修改当前画布，内容按原有布局响应。PDF 保留各页尺寸；混合比例无法导出为一份 PPTX。</p><p class="size-error" role="alert" hidden></p><div class="size-actions"><button type="button" class="size-cancel">取消</button><button type="submit" class="primary">应用尺寸</button></div></form></div>
@@ -2138,6 +2674,98 @@ property of their respective owners.
     };
   }
 
+  // html-design/src/workspace-view.js
+  function createWorkspaceView({
+    S,
+    root,
+    stage,
+    ui,
+    withAll,
+    activate,
+    single
+  }) {
+    const enabled = stage.hasAttribute("data-workspace-prototype");
+    const labels = document.createElement("div");
+    labels.className = "workspace-labels";
+    labels.hidden = true;
+    ui.append(labels);
+    let entries = [], extent = { w: 1280, h: 720 };
+    const active = () => enabled && !!S.workspace && !S.playing;
+    function layout2() {
+      entries = withAll(
+        () => [...stage.querySelectorAll("[data-artboard]")].map((b) => ({
+          b,
+          w: b.offsetWidth || 1280,
+          h: b.offsetHeight || 720
+        }))
+      );
+      let y = 72, maximum = 0;
+      for (let row = 0; row < entries.length; row += 3) {
+        let x = 48, height = 0;
+        for (const item of entries.slice(row, row + 3)) {
+          item.x = x;
+          item.y = y;
+          x += item.w + 140;
+          height = Math.max(height, item.h);
+        }
+        maximum = Math.max(maximum, x - 92);
+        y += height + 140;
+      }
+      extent = { w: Math.max(1, maximum), h: Math.max(1, y - 68) };
+      return extent;
+    }
+    function css() {
+      return `html[data-editor-workspace] [data-artboard]{position:absolute!important;inset:auto!important;margin:0!important;flex:none!important}` + entries.map(
+        ({ b, x, y }) => `html[data-editor-workspace] [data-artboard=${CSS.escape(b.dataset.artboard)}]{left:${x}px!important;top:${y}px!important}`
+      ).join("");
+    }
+    function draw(bounds) {
+      labels.hidden = !active();
+      if (!active()) return;
+      labels.replaceChildren();
+      for (const item of entries) {
+        const r = item.b.getBoundingClientRect();
+        if (r.right < bounds.x || r.left > bounds.x + bounds.w || r.bottom < bounds.y || r.top > bounds.y + bounds.h)
+          continue;
+        const button2 = document.createElement("button");
+        button2.className = "workspace-label";
+        button2.textContent = item.b.dataset.title || item.b.dataset.artboard;
+        button2.title = `${button2.textContent} · ${item.w} × ${item.h} · 双击进入单页`;
+        Object.assign(button2.style, {
+          left: `${Math.max(bounds.x + 4, r.left)}px`,
+          top: `${Math.max(bounds.y + 2, r.top - 28)}px`,
+          maxWidth: `${Math.max(40, r.width)}px`
+        });
+        button2.onclick = () => activate(item.b);
+        button2.ondblclick = () => {
+          activate(item.b);
+          single();
+        };
+        labels.append(button2);
+      }
+    }
+    function boardAt(x, y) {
+      return entries.map((i) => i.b).find((b) => {
+        const r = b.getBoundingClientRect();
+        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+      }) || null;
+    }
+    function highlight(board) {
+      for (const item of entries)
+        item.b.toggleAttribute("data-editor-drop-target", item.b === board);
+    }
+    return {
+      enabled,
+      active,
+      layout: layout2,
+      css,
+      draw,
+      boardAt,
+      highlight,
+      extent: () => extent
+    };
+  }
+
   // html-design/src/viewport.js
   var STEPS = [
     0.1,
@@ -2169,37 +2797,50 @@ property of their respective owners.
     currentPage,
     flush,
     save,
-    toast
+    toast,
+    withAll
   }) {
     let pan = { x: 0, y: 0 }, space = false, panning, restore, playTimer;
-    const clamp2 = (z) => Math.max(0.1, Math.min(4, Math.round(z * 1e3) / 1e3));
+    const workspace = createWorkspaceView({ S, root, stage, ui, withAll, activate(b) {
+      finishEditing("pan");
+      currentPage(b);
+    }, single: () => view(false) });
+    host.toggleAttribute("data-workspace-enabled", workspace.enabled);
+    const workspaceActive = () => workspace.active();
+    const clamp3 = (z) => Math.max(0.1, Math.min(4, Math.round(z * 1e3) / 1e3));
     function bounds() {
       if (S.playing) return { x: 0, y: 0, w: innerWidth, h: innerHeight };
       const nav = root.hasAttribute("data-editor-nav") ? parseFloat(getComputedStyle(ui.host).getPropertyValue("--nav")) || 0 : 0;
       return { x: nav, y: 52, w: innerWidth - nav, h: innerHeight - 92 };
     }
     function size() {
+      if (workspace.active()) return workspace.layout();
       return {
         w: S.current?.offsetWidth || 1280,
         h: S.current?.offsetHeight || 720
       };
     }
     function drawViewport() {
+      if (workspace.enabled && !S.playing) root.toggleAttribute("data-editor-single", !workspace.active());
       if (S.playing && S.playMode === "scroll") {
         const z2 = S.zoom, b2 = size();
         style2.textContent = `@media screen{html[data-editor-scrolling] [data-stage]{position:fixed!important;inset:0!important;display:flex!important;flex-direction:column!important;align-items:center!important;width:100%!important;height:100vh!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:max(32px,calc((100vh - ${b2.h * z2}px)/2)) 24px!important;gap:40px!important;box-sizing:border-box!important;transform:none!important;overflow:auto!important;overscroll-behavior:contain;scrollbar-gutter:stable both-edges}html[data-editor-scrolling] [data-artboard]{display:block!important;flex-shrink:0!important;margin:0!important;zoom:${z2}!important;box-shadow:none!important}}`;
+        workspace.draw(bounds());
         draw();
         return;
       }
       const v = bounds(), b = size(), z = S.zoom;
       const x = v.x + (v.w - b.w * z) / 2 + pan.x, y = v.y + (v.h - b.h * z) / 2 + pan.y;
       style2.textContent = `@media screen{html[data-editor-on] [data-stage]{position:fixed!important;inset:auto!important;left:${x}px!important;top:${y}px!important;display:block!important;width:${b.w}px!important;height:${b.h}px!important;min-width:0!important;min-height:0!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;gap:0!important;transform-origin:0 0!important;transform:scale(${z})!important;overflow:visible!important}html[data-editor-on] [data-artboard]{margin:0!important;box-shadow:none!important}}`;
+      if (workspace.active()) style2.textContent += `@media screen{${workspace.css()}html[data-editor-workspace] [data-editor-drop-target]{outline:${2 / S.zoom}px solid #258bff!important;outline-offset:${4 / S.zoom}px}html[data-editor-workspace] [data-editor-drag-source]{visibility:hidden!important}}`;
+      workspace.draw(v);
+      ui.querySelectorAll(".workspace-switch [data-act]").forEach((n) => n.setAttribute("aria-pressed", String(n.dataset.act === "view-workspace" === !!S.workspace)));
       ui.querySelector("[data-act=zoom-fit]").setAttribute("aria-pressed", S.fit);
       ui.querySelector(".zv").textContent = `${Math.round(z * 100)}%`;
       draw();
     }
     function zoom(value, at = null) {
-      const old = S.zoom, z = clamp2(value), v = bounds();
+      const old = S.zoom, z = clamp3(value), v = bounds();
       if (at) {
         const cx = v.x + v.w / 2, cy = v.y + v.h / 2, k = z / old;
         pan = {
@@ -2230,13 +2871,34 @@ property of their respective owners.
         0.1,
         Math.min((v.w - padding) / b.w, (v.h - padding) / b.h, 4)
       );
-      S.zoom = clamp2(z);
+      S.zoom = clamp3(z);
       drawViewport();
     }
     function step(dir) {
       S.fit = false;
       const z = dir > 0 ? STEPS.find((v) => v > S.zoom + 1e-3) : [...STEPS].reverse().find((v) => v < S.zoom - 1e-3);
       zoom(z ?? S.zoom);
+    }
+    function focusCurrent() {
+      if (!workspace.active() || !S.current) return refresh(true);
+      const v = bounds(), r = S.current.getBoundingClientRect();
+      pan.x += v.x + v.w / 2 - (r.left + r.width / 2);
+      pan.y += v.y + v.h / 2 - (r.top + r.height / 2);
+      S.fit = false;
+      drawViewport();
+    }
+    function view(on) {
+      if (!workspace.enabled || S.playing) return;
+      if (S.drag) {
+        S.drag.cancel?.();
+        S.drag = null;
+      }
+      finishEditing("pan");
+      S.workspace = on;
+      root.toggleAttribute("data-editor-workspace", on);
+      root.toggleAttribute("data-editor-single", !on);
+      pan = { x: 0, y: 0 };
+      fit();
     }
     function refresh(center = false) {
       if (S.fit) fit();
@@ -2455,7 +3117,8 @@ property of their respective owners.
             x: e.clientX,
             y: e.clientY
           });
-        } else if (!S.fit) {
+        } else if (!S.fit || workspace.active()) {
+          S.fit = false;
           pan.x -= e.deltaX;
           pan.y -= e.deltaY;
           drawViewport();
@@ -2463,7 +3126,7 @@ property of their respective owners.
       },
       { passive: false, capture: true }
     );
-    return { zoom, fit, step, refresh, bounds, preview, stop };
+    return { zoom, fit, step, refresh, bounds, preview, stop, workspaceActive, view, focusCurrent, boardAt: workspace.boardAt, highlight: workspace.highlight };
   }
 
   // html-design/src/artboard-size.js
@@ -2511,37 +3174,6 @@ property of their respective owners.
       throw new Error("CSS 的最小/最大尺寸或优先级限制了画布大小，本次未修改");
     }
     return { before, after: board.getAttribute("style") };
-  }
-
-  // html-design/src/identifiers.js
-  function rekeyDOMIds(tree, prefix) {
-    const all = [tree, ...tree.querySelectorAll("*")], ids = /* @__PURE__ */ new Map();
-    for (const node of all)
-      if (node.id) {
-        const old = node.id;
-        node.id = `${prefix}-${old}`;
-        ids.set(old, node.id);
-      }
-    const ordered = [...ids].sort((a, b) => b[0].length - a[0].length);
-    for (const node of all) {
-      for (const attr of [...node.attributes]) {
-        if (["id", "src", "srcset"].includes(attr.name)) continue;
-        let value = attr.value;
-        if (["for", "aria-labelledby", "aria-describedby"].includes(attr.name))
-          value = value.split(" ").map((id) => ids.get(id) || id).join(" ");
-        for (const [before, after] of ordered) {
-          value = value.replaceAll(`url(#${before})`, `url(#${after})`).replaceAll(`url("#${before}")`, `url("#${after}")`).replaceAll(`url('#${before}')`, `url('#${after}')`);
-          if (value === `#${before}`) value = `#${after}`;
-        }
-        if (value !== attr.value) node.setAttribute(attr.name, value);
-      }
-      if (node.matches("style")) {
-        let css = node.textContent;
-        for (const [before, after] of ordered)
-          css = css.replaceAll(`#${before}`, `#${after}`);
-        node.textContent = css;
-      }
-    }
   }
 
   // html-design/src/pages.js
@@ -3167,7 +3799,7 @@ property of their respective owners.
     }
   }
 
-  // node_modules/@chenglou/pretext/dist/generated/engine-break-data.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/generated/engine-break-data.js
   var classMaps = { "chromium/line_normal": [0, 182], "chromium/line_normal_cj": [1, 182], "apple/line_normal": [2, 183], "apple/line": [3, 183], "apple/line_cj": [4, 183], "chromium/char": [5, 148], "apple/char": [6, 149], "gecko/line": [7, 196], "gecko/east_asian_width": [8, 38], "chromium/script": [9, 80] };
   var jointClassCount = 248;
   var classRunsVarints = "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AAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwsAFocBAwAwiAEDAP8PAe8wAA92AXcBABV2BAAAdgDUARJ3ApQBAHgAeQDVAQB5AHcAeADWAQDXAQCUAQB4FXkoAP8DDQYTCwAEAQQAADEABAkxAAEMMQAABDEAAAAxAAABMQAAATEAAAkxcgoPSOoCCgDYAQDZAU8KAUg1CgZIAAofAAsKAG0CCg8YANoBASgB2wEBlQEAMwAoANwBBQAAQQAYAEEAGABBABgBQQAYAEEAGABBABgAQQDdAQA6BBkAMwAoADMAKAAzACgAMwAoADMAKAAzACgAMwAoADMAKAENADMAKAYZACgAGQAoAAAB3gEBlQEAGQBgAGEAYABhAGAAYQcZAAAAGQDfAQDgAQAZAwAECgAAhgEKAQAAjgEAAACWAQEsAHoAlwEBLABkAJgBASwAmQEALACZAQosAeEBAiwAlgEALBmaAQBkACwAmwECLBmaAQBkACwAmwEALABkAJgBAJwBAOIBAOMBAJwBAOQBAEIJ5QEsQgHmAR5CAgAFQgEABUIBAAVCAQACQgIAAJcBAHoCLAF6AAAG5wEAAAhJAi0A6AEABwEACwEAABkBAAASAQAAAQEAAA4BAQANASEAegEEAAIJAwAsAQIACAFOFAAADAUCAAAULgAsBQAYgQEAHAECADABDgAAWhpvAwAjAQgAHQEEACUBBAQEAB0BAAAACSMBAwAHAQAJBAEpAJ0BAQEACQ4FACMBAwAjAQMAJwEHADMBCgALAQAADgEAAAYBAAABAQAACgEAAA4BAAAGAQAAAQFCALYCAQgAFQEJAAcBFwAFEwAAKRMAAAgTRAAFAQEAAAEAACsBAAABAQIAAAEBABYBAAAACUYBBwAIAS8AEgEAAAEBBAAgAQIAAAkZAQQAAAE/ADcBAwATAQEALQEAEQIEAAABBAQAAwQDEQAAAhEAABwRAQACBAMAACkIAQYABwkAAQYAPwEfACQBAQQDAAQBBQkA6QEIADUBAgAGCRUBAQAaAQQAGQEGAAMBCwAGAU8ASAE2ADIBDAAyAQYABQEjCgMdBwAJRwUACUseAAQeAOoB8AEAHgoAACkBAAABBABZAQABAQ8ABUgHAADrAQdIIAAChAECHScBBwAVAQoECAEVABEBAwQDASUAGwETABYBCAAABgAEAAYB7AEyJA0EAJ0BAQkEMgMAEzIJPgAEASQBBAAkCAAA7QEBBAAGLAECBgMEAQYBBAEBAJ4BAwkABAkAAJ4BAQAYAQYACQ4FAAIEIxEEBAAGBQQAKQAEAAAJDgMJABEBBgARBwAiAQAEAAEAIQABCAABBAAGLwECBggEAAYABAABAVsAAQEJAAEACQMEAAEABgAECQ4AAQAhAAECCQAAEwEKABEBAAAYAQIGAgQBBgMEAQkAAQEJAAEABAEBAAQ9AAYBAAAAAQAAAwEAAA4BAAAJAQAJBQAuAQAEAgYHBAQACQ4FAAEEAQYAAAckAQABJAEAFSQAAAYkAAABJAAABCQAAAA/AAQACQAEAAYABAMGAQABBgEAAQYAnQEBAAA+BQAABAQAAAkBPgEkAQYBAAYEAgAEBAoACWUAAABlAQAAZQAAAWUj7gEAAAB7AB4BQwUeAAAAHgEAAB4AAAIeAEMAAAFDAR4A7wEA8AEAHgJ7AAABewcAAR4cADQBAgYHBAEGAgQABgAEAwEDCQABCQ4BCQAAAAEABAIBHQAvAQAEAQYFBAAGAAQBBgAEAAYBBAAGAQQDAQcACQ6lAQAuAQAEAQYDBAEAAwYBBAAGAQQAIQEJATYCAQ4JAwEBBCEALwECBgcEAQYABAAGAQQBCQEBCgAJDgUADHMSACoBAAQABgAEAQYHBAEBBQAJDgUAE0sbABoVAQAAEgAqABIBJwMSACoEEgMACQ4BFQIJBxW4AQArAQIGCAQABgEEAAFjAD8BCQ4IAQsAAAEGKwEAACsBAAcrAAABKwAAFysABAQGAAABBgEAAgQAXQB8AAYAfAAGAAQCCQgACV5FAAcBAQAmAQIGAwQBAAEEAwYABAABACEAAQAGGgAAEQkEJxEFBAAGAAEDBAAhAAEDCQAhAAEAKQcAABEFBAEGAgQnEQVbDAQABgAEACkCCQABAiEBCQwASAEGAAkhVQAAHgBDAh4AQwAeAEOHAQAJSwUACAEAACQBAAYGBAAABQQABgAEAAEECQkACQ4SAQIAACEANh0BAQAVBAAAAAYGBAAGAQQABgEESAAGAQAAAQEAACUBBQQCAAAEAAABBAAABgQAWwAEBwAJDgUABQEAAAEBAAAfAQQGAAABBAAAAQYABAAGAAQAAQYACQ41AAlL9QEAET4ACQEEAQYBCQYAAQQAfAAGDCsAACErAQYEBAIAAQYBBABdAQkKMgk+AB5UAAABDgAcAQNREAEMAAAJmQcBZQBuAQAABAkKAMMBAcsUAGIBDADXBAECRAJMIwEATAIBAEQATABEAEzuAQEARAFMsgEBAEQGnwEAfQB+Ap8BAH0AfgB9AH4ABAUBDgSpHwDNAwEARABMdgG4NQAdoAELHgJDAh4JoAHFDQC4BAEGAB4BAAAJDgMAAQlOAQAACQ4FAB0BAQAEBAAJCQAvAQYEAgkJAQAJAAEJAAkOAAAGAQAAFAEEABIB0gMAAKEBAgADoQECAAF0CUvFAQBWAQEJAQFkAEoBAwAABAABNgYGAAMEDAE/AANAAPEBCgABkgEB8gECZggA9y8NB2b/BQ3VA2coAADzAQgNFWZgAHJm/EMAA2cAAAZnAAABZwAAogINDgAAGhwAAhoBAAAaDQADGgcAiwMNgxIAagEEAAwBAgAIAQYACQEBAAABAQQACQMt2x4A7wE3CfQBAjcCALMDNwUAFjcOABA3DgAtGAEAFhgIAHMFOwD1AQUJACYFAQA7BQF/AhgCBQV/By0HGAEFBhgdBQMYPAUUAEEUAvUBABR5ABMFCwATBQsAVlIIABZSAQWGAQBUBQAARgUAAAEFAQAABQEAAQUBAAMFAAALBQAAAAUAAAYFAABABQAAAwUBAAcFAAAGBQAAGwUAAAMFAAAEBQAAAAUCAAYFAADTAgUBAKMCBQEAMWn/AwE2BAMBMQQHAQAEDQEABAEBAwkAAQ4ABAQAAA4EzwgAHhMFAAUT1AEABgQAABAEAQAGBAAAAQQAAAQEBAA9NSAAADpvACwBAgAGBAYBAQAJDgMAAQG/AgAdAQAEEAArAQMECQ4EAAA9zwMAGwEDBAkO8wEAAR4AAAlL5wEAAB4BAAAeBgABHgQAAB7pAQAGAQAAAwEAAAEBAAAOAQAAxAEBAQAIAQYEKABDAQYEAAEDAAkOAwABRJAGADoFACUCBQAlAwVLADwFwQEAAwoAABoKAAABCgAAAAoBAAAKAAAJCgAAAwoAAAAKAAAACgUAAAoDAAAKAAAACgAAAAoAAAIKAAABCgAAAAoBAAAKAAAACgAAAAoAAAAKAAAACgAAAQoAAAAKAQADCgAABgoAAAMKAAADCgAAAAoAAAkKAAAQCgQAAgoAAAQKAAAQCjMAAQqNAgADDAAIJgwDG2MMCxsODAEbDgwAGw0MAAgAGyQMCRsMBwJoHQcBBTkHAgUCaAEjCwcBIw0HAGIBBwliEQcAaDcbGfYBAA0BCAwbCRkACBMZAAgBGQgIABkDGwgZBhsBCA0bBRmZARsgCAALAQwICwgIAAtFCAALBggAFg0IAQwBCwAMAgsBBQELFAgBHAQIABwECAIWAQgAFgEIABYBSgELBAgLCxAIAQwACwAIAAsADAALAggE9wE+CAALAAgACwEWAQgKFhQIEhYCCAAWAwgCFgAIAhYGCAAWAAgAFg0IABwACAAcAAgAHAQIABYDCAAcAAgBHEkIAAsADAAIBhwPCA0cDAgLHAoFABAACwMIAAwXCAYMAQsBDAALAUoDCwAWCwwACwEMAwsBDABKAwwBFgwMAAgACwEMAAsHDAELCAwACwQMAgsLDAILBwUCCwEMAAsADAALAwwACwUMAAsCDAALBQUAC0kIAhYCCAQWJQUCPAJ1AwUiCAAWDwgCFggIABYECAQMAAsAFgILAggBDAIIAC8CGwMIBQsCDAALAAwBCAIbAAsBDAALCAgCG3MFAgwDVAQMVAUEDAUbCwgDGwAIDhsLBQM7NwUHOwkFBTsnBQc7HQUBOwFoCVQDOwFUDTsIVCY7CwUAFgEIABYHCAcWBQgAFggICRYACAAMAhYGCAAMLwgAFjwIARYACAEWAAgAFhAIAhYACAwWIQhTBQNUBxsNDAEbDAgCGwgIAS8CGwEvLQgALwMIAhYALwAbAC8DGwAvDQgALwEbAC8ICAEvAxsALwgWBhuSAQUAADYFJDcJaQA3BAD9BxsBAP3/Aw0BAP3/Aw2BgCgAAEkALR1JX39/Se8BGI8cSf/fCwA=";
@@ -3182,7 +3814,7 @@ property of their respective owners.
   var geckoLineEotProperty = 67;
   var geckoLineBreakStatesPacked = "kCQB/QMBAf8AAgABAwABBAH9BQgAAQYB/QQKAAEEAf0EEwAHPQH/DkQB/wdEAf8BBQT///8qBEgADEQC/T8BAgAgiAEBKgEPAT5SiAEE/z//QA6IAQAWRAL/Pg/MAQH/BgIAIMwBABDUAgBAkAIABCEAIkQBPBKIAQAOoAQB/SvMAQH/BgEACAwAEQEBKhIXAf1KAQH/BKwEAAa+AQH9Bw0D/f+yFpgDACawBgA6RAAE5AQC/TtV9AYAIEQABYgBAv87ErgHAB3qAgAnLAAEiAEB/xGQAgBA1AIAPkQAJewFADQBABuIAQAEJAA4zAEB/yKQAgADoAQBPQugBAE9KdgLAB3ACAH/RLAGACpEAf9xoAQAIvQGAAREACbUAgABiwMAAiwAZqAEAEeoBQCEAQEAXdwDABuwBgArrAgBNxDACABARAAgzAEAArwBADrgDAAtRAAVswoAWkQAQNgLAAoPASs/RAEsHDABOC7gDAAL7AUBQVj0FwAOkBMB/RGQEwP9Of0qhAkB/07gDABeRAAoiQQAFagWAEyYAwAPxBMACzABNRIlAGmMCgErQ4wKABGwBgH+BQEB/wADAf8ABgH/BhIABg0C/v8EHAT//v/+CAEASZgUAf0LzBIABrAGAAUPArH9FLgYAAfxBgAb9AYAAEQBPFbQGwACVwA4sAYB/iwBAf8OEwATogIB/xAOASoFtwIAVsAIAHwBAA==";
 
-  // node_modules/@chenglou/pretext/dist/line-breaks.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/line-breaks.js
   var BREAK = 1;
   var CLUSTER_START = 2;
   var FORCED_BREAK = 4;
@@ -3920,7 +4552,7 @@ property of their respective owners.
     return nextBreakablePosition(pairs, f, 0) === 0;
   }
 
-  // node_modules/@chenglou/pretext/dist/graphemes.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/graphemes.js
   var CLUSTER_END = 128;
   function parseGraphemeRules(table) {
     const rules = getBreakRules(table === "gecko/char" ? "chromium/char" : table);
@@ -3977,7 +4609,7 @@ property of their respective owners.
     return count;
   }
 
-  // node_modules/@chenglou/pretext/dist/gecko-line-breaks.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/gecko-line-breaks.js
   var CH_SHY = 173;
   var isSurrogatePair = (a, b) => (a & 64512) === 55296 && (b & 64512) === 56320;
   var combine = (a, b) => 65536 + (a - 55296 << 10) + (b - 56320);
@@ -4594,7 +5226,7 @@ property of their respective owners.
     return { breaks: flags, leftOut: tr.leftOut, dropsBidiControl: tr.dropsBidiControl };
   }
 
-  // node_modules/@chenglou/pretext/dist/analysis.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/analysis.js
   var TEXT2 = 0;
   var SPACE2 = 1;
   var ZERO_WIDTH_BREAK = 2;
@@ -5026,7 +5658,7 @@ property of their respective owners.
     return breaks;
   }
 
-  // node_modules/@chenglou/pretext/dist/generated/webkit-generic-families.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/generated/webkit-generic-families.js
   var webkitScriptLanguages = " aa ab ady af ak am ar as ast av ay az ba be bg bi bn bo bs ca ce ceb ch chk cs cy da de dv dz ee efi el en es et eu fa fi fil fj fo fr fur fy ga gaa gd gil gl gn gsw gu ha haw he hi hil ho hr ht hu hy id ig ii ilo inh is it iu ja jv ka kaj kam kbd kha kk kl km kn ko kok kos kpe krc ks ku kum ky la lah lb lez ln lo lt lv mai mdf mg mh mi mk ml mn mr ms mt my myv na nb ne niu nl nn nr nso ny oc om or os pa pag pap pau pl pon ps pt qu rm rn ro ru rw sa sah sat sd se sg si sid sk sl sm so sq sr ss st su sv sw ta te tet tg th ti tig tk tkl tl tn to tpi tr trv ts tt tvl tw ty tyv udm ug uk und ur uz ve vi wal war wo xh yap yo za zh zh-hk zh-tw zu ";
   var webkitScriptSubtags = " arab armn bali batk beng blis bopo brah brai bugi buhd cans cham cher cirt copt cprt cyrl cyrs deva dsrt egyd egyh egyp ethi geok geor glag goth grek gujr guru hang hani hano hans hant hebr hira hmng hrkt hung inds ital java jpan kali kana khar khmr knda kore laoo latf latg latn lepc limb lina linb mand maya mero mlym mong mymr nkoo ogam orkh orya osma perm phag phnx plrd qaai roro runr sara shaw sinh sylo syrc syre syrj syrn tagb tale talu taml telu teng tfng tglg thaa thai tibt ugar vaii visp xpeo xsux yiii zxxx ";
   var webkitGenericFamilyNames = ["", "Zapfino", "Menlo", "Kefa III", "Geeza Pro", "Snell Roundhand", "Kohinoor Bangla", "Kokonor|Kailasa", "Kailasa", "Galvji", "Noto Sans Tagalog", "Kohinoor Gujarati", "Lucida Grande|Arial Hebrew", "Apple Chancery|Arial Hebrew", "Courier New", "ITF Devanagari|Kohinoor Devanagari", "Kohinoor Devanagari", "Noto Sans Armenian", "Euphemia UCAS", "Hiragino Mincho ProN", "Hiragino Sans", "Helvetica", "Khmer MN|Khmer Sangam MN", "Khmer Sangam MN", "Kannada MN|Noto Sans Kannada", "Noto Sans Kannada", "AppleMyungjo|Apple SD Gothic Neo", "Apple SD Gothic Neo", "Noto Nastaliq Urdu", "Lao MN|Lao Sangam MN", "Lao Sangam MN", "Malayalam MN|Malayalam Sangam MN", "Malayalam Sangam MN", "Noto Serif Myanmar|Noto Sans Myanmar", "Noto Sans Myanmar", "Oriya MN|Noto Sans Oriya", "Noto Sans Oriya", "Mukta Mahee", "Sinhala MN|Sinhala Sangam MN", "Sinhala Sangam MN", "Tamil Sangam MN", "Kohinoor Telugu", "Thonburi", "Songti TC|PingFang HK", "PingFang HK", "Songti SC|PingFang SC", "PingFang SC", "Songti TC|PingFang TC", "PingFang TC", "Songti TC|PingFang MO", "PingFang MO"];
@@ -5094,7 +5726,7 @@ property of their respective owners.
     "zh-hant-mo": [49, 50, 49, 49, 2]
   };
 
-  // node_modules/@chenglou/pretext/dist/measurement.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/measurement.js
   var measureState = null;
   var cachedEngineProfile = null;
   var MAX_PREFIX_FIT_GRAPHEMES = 96;
@@ -5732,7 +6364,7 @@ property of their respective owners.
     measureState.segments = 0;
   }
 
-  // node_modules/@chenglou/pretext/dist/han-kerning.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/han-kerning.js
   var OTHER = 0;
   var OPEN = 1;
   var CLOSE = 2;
@@ -5924,7 +6556,7 @@ property of their respective owners.
     return out;
   }
 
-  // node_modules/@chenglou/pretext/dist/prepare.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/prepare.js
   function countRenderedSpacingGraphemes(text, kind, graphemeTable) {
     return kind === ZERO_WIDTH_BREAK ? 0 : findGraphemeEnds(graphemeTable, text, 0, text.length, null);
   }
@@ -6393,7 +7025,7 @@ property of their respective owners.
     return trims;
   }
 
-  // node_modules/@chenglou/pretext/dist/line-break.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/line-break.js
   var BREAK_AFTER_KINDS = 1 << SPACE2 | 1 << ZERO_WIDTH_BREAK | 1 << SOFT_HYPHEN | 1 << PRESERVED_SPACE | 1 << TAB2;
   function breaksAfterKind(kind) {
     return (1 << kind & BREAK_AFTER_KINDS) !== 0;
@@ -7025,7 +7657,7 @@ property of their respective owners.
     return lineW - endTrimmed;
   }
 
-  // node_modules/@chenglou/pretext/dist/layout.js
+  // ../../../Users/yifutao/Documents/My-Code/design-canvas-shapes-font-accept/node_modules/@chenglou/pretext/dist/layout.js
   function prepareInternal(text, font2, includeSegments, options) {
     const wordBreak = options?.wordBreak ?? "normal";
     const engineProfile = getEngineProfile();
@@ -7235,15 +7867,117 @@ property of their respective owners.
     };
   }
 
+  // html-design/src/shapes.js
+  var NS = "http://www.w3.org/2000/svg";
+  var SHAPE_NAMES = {
+    rect: "矩形",
+    ellipse: "椭圆",
+    triangle: "三角形",
+    diamond: "菱形",
+    star: "星形",
+    line: "直线",
+    arrow: "线箭头",
+    blockArrow: "块箭头"
+  };
+  var clamp2 = (n, min, max) => Math.min(max, Math.max(min, Number(n) || 0));
+  var color = (value, fallback) => /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : fallback;
+  var starPoints = (inner, inset, width, height) => {
+    const points = Array.from({ length: 10 }, (_, i) => {
+      const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? inner : 50;
+      return [Math.cos(a) * r, Math.sin(a) * r];
+    });
+    const xs = points.map((p) => p[0]), ys = points.map((p) => p[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    return points.map(([x, y]) => `${inset + (x - minX) * (width - 2 * inset) / (maxX - minX)},${inset + (y - minY) * (height - 2 * inset) / (maxY - minY)}`).join(" ");
+  };
+  var defaultStrokeWidth = (kind) => kind === "line" || kind === "arrow" ? 4 : 2;
+  var dimensions = (kind) => ({ width: kind === "star" ? 132 : 220, height: kind === "line" ? 8 : kind === "arrow" ? 44 : 132 });
+  var dimension = (value, fallback) => Number.isFinite(Number(value)) && Number(value) >= 8 ? Math.round(Number(value) * 1e3) / 1e3 : fallback;
+  var viewBox = (width, height) => `0 0 ${width} ${height}`;
+  var ROUNDABLE = /* @__PURE__ */ new Set(["rect", "triangle", "diamond", "star", "blockArrow"]);
+  var roundedPolygon = (points, radius, attrs2) => {
+    if (!radius) return `<polygon points="${points}" ${attrs2}/>`;
+    const vertices = points.split(" ").map((pair) => pair.split(",").map(Number));
+    const corners = vertices.map(([x, y], i) => {
+      const prev = vertices[(i + vertices.length - 1) % vertices.length];
+      const next = vertices[(i + 1) % vertices.length];
+      const a = Math.hypot(prev[0] - x, prev[1] - y), b = Math.hypot(next[0] - x, next[1] - y);
+      const cut = Math.min(radius, a / 2, b / 2);
+      return { x, y, start: [x + (prev[0] - x) * cut / a, y + (prev[1] - y) * cut / a], end: [x + (next[0] - x) * cut / b, y + (next[1] - y) * cut / b] };
+    });
+    const [first, ...rest] = corners;
+    const d = `M${first.start} Q${first.x},${first.y} ${first.end} ` + rest.map((c) => `L${c.start} Q${c.x},${c.y} ${c.end}`).join(" ") + ` L${first.start}Z`;
+    return `<path d="${d}" ${attrs2}/>`;
+  };
+  function shapeGeometry(kind, fill, stroke, sw, adjust, radius, width, height) {
+    const edge = Math.min(sw / 2, (width - 1) / 2, (height - 1) / 2);
+    const midX = width / 2, midY = height / 2;
+    const tipX = width - edge, bottom = height - edge;
+    const shaftTop = height * (30 - adjust * 0.2) / 120;
+    const shaftBottom = height * (90 + adjust * 0.2) / 120;
+    const headX = width * (125 - adjust * 0.5) / 200;
+    const outline = `stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"`;
+    const filled = `fill="${fill}" ${outline}`;
+    const lineStyle = `fill="none" stroke="${stroke}" stroke-width="${Math.max(1, sw)}" stroke-linecap="round" stroke-linejoin="round"`;
+    const geometry = {
+      rect: `<rect x="${edge}" y="${edge}" width="${width - 2 * edge}" height="${height - 2 * edge}" rx="${radius}" ${filled}/>`,
+      ellipse: `<ellipse cx="${midX}" cy="${midY}" rx="${midX - edge}" ry="${midY - edge}" ${filled}/>`,
+      triangle: roundedPolygon(`${midX},${edge} ${tipX},${bottom} ${edge},${bottom}`, radius, filled),
+      diamond: roundedPolygon(`${midX},${edge} ${tipX},${midY} ${midX},${bottom} ${edge},${midY}`, radius, filled),
+      star: roundedPolygon(starPoints(12 + adjust * 0.52, edge, width, height), radius, filled),
+      line: `<path d="M${edge} ${midY}H${tipX}" ${lineStyle}/>`,
+      arrow: `<path d="M${edge} ${midY}H${tipX} M${width * (190 - adjust) / 200} ${edge}L${tipX} ${midY}L${width * (190 - adjust) / 200} ${bottom}" ${lineStyle}/>`,
+      blockArrow: roundedPolygon(`${edge},${shaftTop} ${headX},${shaftTop} ${headX},${edge} ${tipX},${midY} ${headX},${bottom} ${headX},${shaftBottom} ${edge},${shaftBottom}`, radius, filled)
+    };
+    return geometry[kind] || "";
+  }
+  function renderShape(el, size) {
+    const kind = el.dataset.shape;
+    const defaults = dimensions(kind);
+    const style2 = el.isConnected ? getComputedStyle(el) : el.style;
+    const width = dimension(size?.width ?? parseFloat(style2.width), defaults.width);
+    const height = dimension(size?.height ?? parseFloat(style2.height), defaults.height);
+    el.setAttribute("viewBox", viewBox(width, height));
+    el.setAttribute("preserveAspectRatio", "none");
+    const fill = color(el.dataset.shapeFill, "#86868b");
+    const stroke = color(el.dataset.shapeStroke, "#86868b");
+    const sw = clamp2(el.dataset.shapeWidth ?? defaultStrokeWidth(kind), 0, 16);
+    const adjust = clamp2(el.dataset.shapeAdjust ?? 20, 0, 50);
+    const radius = clamp2(el.dataset.shapeRadius ?? (kind === "rect" ? adjust : 0), 0, 50);
+    el.innerHTML = shapeGeometry(kind, fill, stroke, sw, adjust, radius, width, height);
+  }
+  function makeShape(kind, id) {
+    if (!SHAPE_NAMES[kind]) return null;
+    const el = document.createElementNS(NS, "svg");
+    el.setAttribute("data-el", id);
+    el.setAttribute("data-shape", kind);
+    el.setAttribute("aria-label", SHAPE_NAMES[kind]);
+    el.dataset.shapeFill = "#86868b";
+    el.dataset.shapeStroke = "#86868b";
+    el.dataset.shapeWidth = String(defaultStrokeWidth(kind));
+    el.dataset.shapeAdjust = kind === "rect" ? "12" : "20";
+    el.dataset.shapeRadius = kind === "rect" ? "12" : "0";
+    const size = dimensions(kind);
+    el.style.width = `${size.width}px`;
+    el.style.height = `${size.height}px`;
+    el.style.display = "block";
+    el.style.overflow = "visible";
+    renderShape(el);
+    return el;
+  }
+  var shapeHasFill = (kind) => kind !== "line" && kind !== "arrow";
+  var shapeHasAdjust = (kind) => ["star", "arrow", "blockArrow"].includes(kind);
+  var shapeHasRadius = (kind) => ROUNDABLE.has(kind);
+
   // html-design/src/guides.js
   var anchors = (r, axis) => axis === "x" ? [r.x, r.x + r.w / 2, r.x + r.w] : [r.y, r.y + r.h / 2, r.y + r.h];
-  var dimensions = (axis) => axis === "x" ? ["x", "w", "y", "h"] : ["y", "h", "x", "w"];
+  var dimensions2 = (axis) => axis === "x" ? ["x", "w", "y", "h"] : ["y", "h", "x", "w"];
   var crossRange = (rects, axis) => {
-    const [, , cross, size] = dimensions(axis);
+    const [, , cross, size] = dimensions2(axis);
     return [Math.max(...rects.map((r) => r[cross])), Math.min(...rects.map((r) => r[cross] + r[size]))];
   };
   function spacingCandidates(moving, peers, axis, threshold) {
-    const [start, size] = dimensions(axis), end = (r) => r[start] + r[size];
+    const [start, size] = dimensions2(axis), end = (r) => r[start] + r[size];
     const center = moving[start] + moving[size] / 2;
     const related = peers.filter((r) => {
       const [a, b] = crossRange([moving, r], axis);
@@ -7260,7 +7994,7 @@ property of their respective owners.
       const match = { kind: "spacing", axis, mode, peers: [a, b], gap, offset, distance };
       const placed = { ...moving, [start]: position };
       const { spans } = spacingSpans(match, placed);
-      const [, , cross, crossSize] = dimensions(axis);
+      const [, , cross, crossSize] = dimensions2(axis);
       const blocked = related.some((r) => r !== a && r !== b && r[cross] < high && r[cross] + r[crossSize] > low && spans.some(([from, to]) => to > from && r[start] < to && end(r) > from));
       if (!blocked) candidates.push(match);
     };
@@ -7285,7 +8019,7 @@ property of their respective owners.
     return candidates;
   }
   function spacingSpans(match, moving) {
-    const [start, size] = dimensions(match.axis), end = (r) => r[start] + r[size];
+    const [start, size] = dimensions2(match.axis), end = (r) => r[start] + r[size];
     const [a, b] = match.peers;
     const [low, high] = crossRange([moving, a, b], match.axis);
     const spans = match.mode === "between" ? [[end(a), moving[start]], [end(moving), b[start]]] : match.mode === "after" ? [[end(a), b[start]], [end(b), moving[start]]] : [[end(moving), a[start]], [end(a), b[start]]];
@@ -7517,93 +8251,13 @@ property of their respective owners.
     };
   }
 
-  // html-design/src/selection.js
-  function selectionRoots(nodes) {
-    const unique = [...new Set(nodes)].filter((n) => n?.isConnected);
-    return unique.filter(
-      (n) => !unique.some((other) => other !== n && other.contains(n))
-    );
-  }
-  function unionRect(nodes) {
-    const rects = nodes.map(objectRect);
-    const left = Math.min(...rects.map((r) => r.left)), top = Math.min(...rects.map((r) => r.top));
-    const right = Math.max(...rects.map((r) => r.right)), bottom = Math.max(...rects.map((r) => r.bottom));
-    return {
-      left,
-      top,
-      right,
-      bottom,
-      width: right - left,
-      height: bottom - top
-    };
-  }
-  function selectable(board, context = null) {
-    return [...new Set([...(context || board).querySelectorAll("[data-el]")].map((n) => logicalTarget(n, context)))].filter((n) => {
-      if (!n) return false;
-      const r = objectRect(n), s = getComputedStyle(n);
-      return n.closest("[data-artboard]") === board && r.width > 0 && r.height > 0 && s.visibility === "visible" && s.opacity !== "0";
-    });
-  }
-  function directionTarget(nodes, board, key, context = null) {
-    const selected = selectionRoots(nodes);
-    if (!selected.length) return null;
-    const from = objectRect(selected.at(-1));
-    const x = from.left + from.width / 2, y = from.top + from.height / 2;
-    const horizontal = ["ArrowLeft", "ArrowRight"].includes(key), sign = ["ArrowLeft", "ArrowUp"].includes(key) ? -1 : 1;
-    let best = null;
-    for (const node of selectable(board, context)) {
-      if (selected.some((n) => n === node || n.contains(node) || node.contains(n)))
-        continue;
-      const r = objectRect(node), dx = r.left + r.width / 2 - x, dy = r.top + r.height / 2 - y;
-      const forward = (horizontal ? dx : dy) * sign, cross = Math.abs(horizontal ? dy : dx);
-      if (forward <= 1) continue;
-      const score = forward + cross * 2;
-      if (!best || score < best.score) best = { node, score };
-    }
-    return best?.node || null;
-  }
-  function createSelectionOverlay(ui) {
-    const members = document.createElement("div"), marquee = document.createElement("div");
-    members.className = "selection-members";
-    marquee.className = "marquee";
-    marquee.hidden = true;
-    ui.append(members, marquee);
-    return {
-      draw(nodes) {
-        members.replaceChildren();
-        if (nodes.length < 2) return;
-        for (const node of nodes) {
-          const r = objectRect(node), frame = document.createElement("div");
-          frame.className = "selection-member";
-          Object.assign(frame.style, {
-            left: r.left + "px",
-            top: r.top + "px",
-            width: r.width + "px",
-            height: r.height + "px"
-          });
-          members.append(frame);
-        }
-      },
-      marquee(rect) {
-        marquee.hidden = !rect;
-        if (rect)
-          Object.assign(marquee.style, {
-            left: rect.left + "px",
-            top: rect.top + "px",
-            width: rect.width + "px",
-            height: rect.height + "px"
-          });
-      }
-    };
-  }
-
   // html-design/src/editor.js
   (() => {
     if (window.__htmlDesignEditor) return;
     window.__htmlDesignEditor = true;
     const MEDIA = "img,video,canvas,svg,iframe,picture,[data-crop-frame]";
     const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
-    const SKIP_ATTR = /^(contenteditable|data-editor-current)$/;
+    const SKIP_ATTR = /^(contenteditable|data-editor-current|data-editor-drop-target|data-editor-drag-source)$/;
     function main() {
       const root = document.documentElement;
       const stage = document.querySelector("[data-stage]") || document.body;
@@ -7623,6 +8277,7 @@ property of their respective owners.
         undo: [],
         redo: [],
         changed: false,
+        workspace: false,
         zoom: 1,
         fit: true,
         replace: null
@@ -7665,7 +8320,7 @@ property of their respective owners.
         if (!host.isConnected) root.append(host);
       }).observe(root, { childList: true });
       const ui = host.attachShadow({ mode: "open" });
-      ui.innerHTML = toolbarHTML({ HANDLES });
+      ui.innerHTML = toolbarHTML({ HANDLES, WORKSPACE: stage.hasAttribute("data-workspace-prototype") });
       const $ = (s) => ui.querySelector(s);
       const side = $(".nav"), head = $(".head"), selBox = $(".sel"), tbar = $(".tbar");
       const helpDialog = $(".help-dialog");
@@ -7767,6 +8422,7 @@ property of their respective owners.
       function history(dir) {
         if (crop.active) return crop.history(dir);
         endText();
+        finishAllShapeParams();
         const from = dir < 0 ? S.undo : S.redo, to = dir < 0 ? S.redo : S.undo, c = from.pop();
         if (!c) return;
         if (c.board?.isConnected && c.board !== S.current) goTo(c.board);
@@ -7830,6 +8486,7 @@ property of their respective owners.
         host,
         ui,
         style: zoomStyle,
+        withAll,
         draw: drawSel,
         pageStep,
         finishEditing(resume) {
@@ -7842,9 +8499,31 @@ property of their respective owners.
           markActive();
           syncBar();
         },
-        flush: () => persistence?.flush() || Promise.resolve(),
+        flush: () => {
+          finishAllShapeParams();
+          return persistence?.flush() || Promise.resolve();
+        },
         save: () => save(),
         toast
+      });
+      const transfer = createWorkspaceTransfer({
+        S,
+        stage,
+        ui,
+        viewport,
+        snap,
+        apply,
+        push,
+        select,
+        elementId,
+        canEdit: () => S.editing && !S.playing && !!persistence?.canEdit(),
+        toast,
+        activate(b, focus = false) {
+          setCurrent(b);
+          markActive();
+          syncBar();
+          if (focus) viewport.workspaceActive() ? viewport.focusCurrent() : viewport.refresh(true);
+        }
       });
       const applyZoom = (z, at = null) => viewport.zoom(z, at);
       const zoomStep = (dir) => viewport.step(dir);
@@ -7871,6 +8550,7 @@ property of their respective owners.
       }
       function setEditing(on) {
         if (on && persistence && !persistence.canEdit()) return;
+        if (!on) finishAllShapeParams();
         S.editing = on;
         root.toggleAttribute("data-editing", on);
         host.toggleAttribute("data-editing", on);
@@ -7901,6 +8581,10 @@ property of their respective owners.
           "artboard",
           "add-text",
           "add-image",
+          "add-shape",
+          "shape-insert",
+          "shape-width-up",
+          "shape-width-down",
           "src-apply",
           "image-replace",
           "image-fit",
@@ -7941,7 +8625,7 @@ property of their respective owners.
         );
         const m = tops.map((el) => {
           const style2 = getComputedStyle(el);
-          const dimension = (axis, sides) => (parseFloat(style2[axis]) || (axis === "width" ? el.offsetWidth : el.offsetHeight)) + (style2.boxSizing === "border-box" ? 0 : sides.reduce(
+          const dimension2 = (axis, sides) => (parseFloat(style2[axis]) || (axis === "width" ? el.offsetWidth : el.offsetHeight)) + (style2.boxSizing === "border-box" ? 0 : sides.reduce(
             (sum, side2) => sum + parseFloat(style2[`padding${side2}`]) + parseFloat(style2[`border${side2}Width`]),
             0
           ));
@@ -7949,8 +8633,8 @@ property of their respective owners.
             el,
             r: el.getBoundingClientRect(),
             media: el.matches(MEDIA),
-            w: dimension("width", ["Left", "Right"]),
-            h: dimension("height", ["Top", "Bottom"])
+            w: dimension2("width", ["Left", "Right"]),
+            h: dimension2("height", ["Top", "Bottom"])
           };
         });
         const els = [b, ...tops];
@@ -8256,9 +8940,10 @@ property of their respective owners.
         const b = el.closest("[data-artboard]"), s = scaleOf(b), nodes = groupRoots(S.selection), positions = nodes.map((node) => ({ node, p: getPos(node), g: elementGeometry(node) })), before = snap(nodes);
         if (!transformable(S.selection) || positions.some((item) => !item.g.supported)) return toast("这种变换暂不支持拖动、缩放或旋转");
         let alignment = guides.begin(nodes, b, S.group);
-        const x0 = e.clientX, y0 = e.clientY;
-        let moved = false;
+        const x0 = e.clientX, y0 = e.clientY, boardStart = b.getBoundingClientRect(), cross = transfer.enabled ? transfer.begin(S.selection) : null;
+        let moved = false, lastEvent = e;
         S.drag = {
+          kind: "element",
           move(ev) {
             if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3)
               return;
@@ -8271,12 +8956,15 @@ property of their respective owners.
               alignment = guides.begin(nodes, b, S.group);
             }
             moved = true;
+            lastEvent = ev;
+            const currentBoard = b.getBoundingClientRect(), currentScale = scaleOf(b), workspace = viewport.workspaceActive();
+            const outside = workspace && (ev.clientX < currentBoard.left || ev.clientX > currentBoard.right || ev.clientY < currentBoard.top || ev.clientY > currentBoard.bottom);
             const delta = alignment.move(
               {
-                x: (ev.clientX - x0) / s,
-                y: (ev.clientY - y0) / s
+                x: workspace ? (ev.clientX - currentBoard.left) / currentScale - (x0 - boardStart.left) / s : (ev.clientX - x0) / s,
+                y: workspace ? (ev.clientY - currentBoard.top) / currentScale - (y0 - boardStart.top) / s : (ev.clientY - y0) / s
               },
-              ev.altKey
+              ev.altKey || outside
             );
             positions.forEach(({ node, p, g }) => {
               const d = inverseDelta(g.parent, delta.x * s, delta.y * s);
@@ -8284,12 +8972,16 @@ property of their respective owners.
             });
             drawSel();
             alignment.draw(delta.matches);
+            if (cross) transfer.move(cross, ev);
           },
-          up() {
+          up(event) {
             guides.clear();
+            if (moved && cross && transfer.drop(cross, event || lastEvent)) return;
+            transfer.clear();
             if (moved) commit(before, b);
           },
           cancel() {
+            transfer.clear();
             guides.clear();
             apply(before);
             drawSel();
@@ -8321,7 +9013,7 @@ property of their respective owners.
         if (!initial.supported) return toast("这种变换暂不支持拖动、缩放或旋转");
         const media = el.matches(MEDIA), text = !media && !el.querySelector("[data-el],img,svg,canvas,video,iframe") && !!el.textContent.trim();
         const metrics = text && dir.length === 2 ? textMetrics(el) : null;
-        const before = snap(metrics ? metrics.map((m) => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el]);
+        const before = snap(metrics ? metrics.map((m) => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches("svg[data-shape]"));
         const hp = media || el.style.height ? "height" : "minHeight";
         const x0 = e.clientX, y0 = e.clientY;
         let g = initial, p = getPos(el), anchor, moved = false;
@@ -8365,6 +9057,7 @@ property of their respective owners.
               el.style[hp] = Math.round(Math.max(8, h) * 1e3) / 1e3 + "px";
               if (el.matches("[data-crop-frame]")) cropImage(el).style.setProperty("height", "100%", "important");
             }
+            if (el.matches("svg[data-shape]")) renderShape(el, { width: Math.max(8, w), height: Math.max(8, h) });
             setPos(el, p, p.x, p.y);
             const now = elementGeometry(el), current = resizeAnchor(now, dir);
             const d = inverseDelta(now.parent, anchor.x - current.x, anchor.y - current.y);
@@ -8596,6 +9289,15 @@ property of their respective owners.
         s.removeAllRanges();
         s.addRange(r);
       }
+      function addShape(kind) {
+        const b = activeBoard();
+        if (!b || !visible(b) || !persistence?.canEdit()) return;
+        endText();
+        const el = makeShape(kind, elementId(b, "shape"));
+        if (!el) return;
+        placeNew(el, b, kind === "star" ? 132 : 220, kind === "line" ? 8 : kind === "arrow" ? 44 : 132);
+        select(el);
+      }
       function addImage(src) {
         const b = activeBoard();
         if (!b || !visible(b) || !persistence?.canEdit()) return;
@@ -8795,9 +9497,9 @@ property of their respective owners.
         alignButton.innerHTML = icon(["AlignLeft", "AlignCenter", "AlignRight", "AlignJustify"][index]);
         alignButton.title = `${labels[index]}；点击切换为${labels[(index + 1) % 4]}`;
         alignButton.setAttribute("aria-label", `文字对齐：${alignButton.title}`);
-        const color = getComputedStyle(el.contains(at) ? at : el).color;
-        $(".color-swatch").style.background = color;
-        const rgb = color.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
+        const color2 = getComputedStyle(el.contains(at) ? at : el).color;
+        $(".color-swatch").style.background = color2;
+        const rgb = color2.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
         if (rgb && ui.activeElement !== $(".cpick")) $(".cpick").value = "#" + rgb.slice(1).map((n2) => Number(n2).toString(16).padStart(2, "0")).join("");
       }
       function placeTbar() {
@@ -8833,6 +9535,20 @@ property of their respective owners.
         $(".text-tools").hidden = !text;
         $(".more-text-section").hidden = !text;
         $(".image-tools").hidden = !image;
+        const shape = !multi && el.matches("svg[data-shape]");
+        $(".shape-tools").hidden = !shape;
+        $(".shape-more-section").hidden = !shape || !shapeHasAdjust(el.dataset.shape);
+        if (shape) {
+          for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust, radius: el.dataset.shapeRadius ?? (el.dataset.shape === "rect" ? el.dataset.shapeAdjust : "0") })) {
+            const input = $(`[data-shape-prop=${prop}]`);
+            if (ui.activeElement !== input) input.value = value;
+          }
+          $(".shape-color").hidden = !shapeHasFill(el.dataset.shape);
+          $(".shape-fill-color .shape-swatch").style.background = el.dataset.shapeFill;
+          $(".shape-stroke-color .shape-swatch").style.borderColor = el.dataset.shapeStroke;
+          $(".shape-radius").hidden = !shapeHasRadius(el.dataset.shape);
+          $(".shape-adjust").firstChild.textContent = { star: "尖角", arrow: "箭头", blockArrow: "箭头" }[el.dataset.shape] || "形状调整";
+        }
         if (image) {
           const fit = getComputedStyle(cropImage(el)).objectFit;
           $("[data-act=image-fit]").setAttribute(
@@ -8869,6 +9585,11 @@ property of their respective owners.
           e.target.blur();
         }
       });
+      function stepFontSize(delta) {
+        const input = $(".fs");
+        const current = Number(input.value) || parseFloat(getComputedStyle(S.text?.el || S.sel).fontSize) || 18;
+        fmt("size", Math.max(6, Math.min(999, Math.round(current) + delta)));
+      }
       $(".rotation-angle").addEventListener("change", (e) => rotateTo(e.target.valueAsNumber));
       $(".rotation-angle").addEventListener("keydown", (e) => {
         if (e.key === "Enter") {
@@ -8980,7 +9701,7 @@ property of their respective owners.
           const controlKey = e.ctrlKey || e.metaKey, localShortcut = controlKey && ["g", "a"].includes(e.key.toLowerCase()), zoomKey = controlKey && ["=", "+", "-", "_", "0", "1"].includes(e.key);
           if (e.composedPath().some(
             (n) => n instanceof Element && n.matches("input,textarea,select,[contenteditable]:not([contenteditable=false])")
-          ) && !zoomKey && !(e.key === "Escape" && S.text && e.composedPath().includes(S.text.el)) && !(controlKey && e.key.toLowerCase() === "s"))
+          ) && !zoomKey && !(e.key === "Escape" && S.text && e.composedPath().includes(S.text.el)) && !(controlKey && (e.key.toLowerCase() === "s" || ["z", "y"].includes(e.key.toLowerCase()) && e.composedPath().some((n) => n instanceof Element && n.hasAttribute("data-shape-prop")))))
             return;
           if (!modal.hidden && !zoomKey && !(controlKey && e.key.toLowerCase() === "s") && e.key !== "Escape") return;
           if (localShortcut && (crop.active || !modal.hidden || ui.querySelector("[data-menu]:not([hidden])") || ui.activeElement?.closest(".thumb"))) return;
@@ -9077,6 +9798,15 @@ property of their respective owners.
           if (fromUI(e)) return;
           closeMenus();
           host.removeAttribute("data-mobile-nav");
+          const clickedBoard = e.target.closest?.("[data-artboard]");
+          if (viewport.workspaceActive() && clickedBoard && clickedBoard !== S.current) {
+            crop.finish();
+            endText();
+            select(null);
+            setCurrent(clickedBoard);
+            markActive();
+            syncBar();
+          }
           if (!S.editing) return;
           if (!inStage(e.target)) {
             endText();
@@ -9160,6 +9890,12 @@ property of their respective owners.
           true
         )
       );
+      addEventListener("copy", (e) => {
+        if (!fromUI(e) && !crop.active) transfer.copyEvent(e);
+      }, true);
+      addEventListener("paste", (e) => {
+        if (!fromUI(e) && !crop.active) transfer.pasteEvent(e);
+      }, true);
       addEventListener(
         "paste",
         (e) => {
@@ -9317,6 +10053,8 @@ property of their respective owners.
           btn.setAttribute("aria-pressed", on);
           viewport.refresh(true);
         },
+        "view-single": () => viewport.view(false),
+        "view-workspace": () => viewport.view(true),
         prev: () => pageStep(-1),
         next: () => pageStep(1),
         edit: () => {
@@ -9348,6 +10086,12 @@ property of their respective owners.
           S.replace = null;
           fileIn.click();
         },
+        "add-shape": (btn) => openMenu("shape", btn),
+        "shape-insert": (btn) => addShape(btn.dataset.shapeKind),
+        "shape-width-up": () => stepShapeWidth(1),
+        "shape-width-down": () => stepShapeWidth(-1),
+        "font-size-up": () => stepFontSize(1),
+        "font-size-down": () => stepFontSize(-1),
         undo: () => history(-1),
         redo: () => history(1),
         "page-add": () => pages.add(),
@@ -9434,6 +10178,11 @@ property of their respective owners.
         "artboard",
         "add-text",
         "add-image",
+        "shape-insert",
+        "shape-width-up",
+        "shape-width-down",
+        "font-size-up",
+        "font-size-down",
         "undo",
         "redo",
         "src-apply",
@@ -9478,9 +10227,56 @@ property of their respective owners.
         }
         const act = btn.dataset.act;
         if (!act) return;
-        if (!["preview", "export", "more", "status", "element-more", "text-layout", "rotation"].includes(act))
+        if (!["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape"].includes(act))
           closeMenus();
         runAction(act, btn);
+      });
+      const shapePending = /* @__PURE__ */ new Map();
+      function previewShapeParam(input) {
+        const prop = input.dataset?.shapeProp;
+        const el = S.sel;
+        if (!prop || !el?.matches("svg[data-shape]") || !S.editing || !persistence?.canEdit()) return;
+        const field = { fill: "shapeFill", stroke: "shapeStroke", width: "shapeWidth", adjust: "shapeAdjust", radius: "shapeRadius" }[prop];
+        if (!field) return;
+        if (["width", "adjust", "radius"].includes(prop) && !Number.isFinite(input.valueAsNumber)) return;
+        const pending = shapePending.get(input);
+        const fresh = !pending || pending.el !== el;
+        if (fresh) shapePending.set(input, { el, before: snap([el], true) });
+        el.dataset[field] = input.value;
+        if (prop === "stroke" && Number(el.dataset.shapeWidth) === 0) {
+          el.dataset.shapeWidth = "2";
+          $("[data-shape-prop=width]").value = "2";
+        }
+        if (prop === "fill") $(".shape-fill-color .shape-swatch").style.background = input.value;
+        if (prop === "stroke") $(".shape-stroke-color .shape-swatch").style.borderColor = input.value;
+        renderShape(el);
+        if (fresh) persistence?.markDirty();
+      }
+      function finishShapeParam(input) {
+        const pending = shapePending.get(input);
+        if (!pending) return;
+        shapePending.delete(input);
+        if (pending.el.isConnected) commit(pending.before, pending.el.closest("[data-artboard]"));
+        drawSel();
+      }
+      function finishAllShapeParams() {
+        for (const input of [...shapePending.keys()]) finishShapeParam(input);
+      }
+      function stepShapeWidth(delta) {
+        if (!S.sel?.matches("svg[data-shape]")) return;
+        const input = $("[data-shape-prop=width]");
+        input.value = String(Math.max(0, Math.min(16, (Number(input.value) || 0) + delta)));
+        previewShapeParam(input);
+        finishShapeParam(input);
+      }
+      ui.addEventListener("input", (e) => previewShapeParam(e.target));
+      ui.addEventListener("change", (e) => {
+        if (!e.target.dataset?.shapeProp) return;
+        previewShapeParam(e.target);
+        finishShapeParam(e.target);
+      });
+      ui.addEventListener("focusout", (e) => {
+        if (e.target.dataset?.shapeProp) finishShapeParam(e.target);
       });
       ui.addEventListener("keydown", (e) => {
         if (e.target.matches(".rotation-angle")) return;
@@ -9562,6 +10358,8 @@ property of their respective owners.
         ns.querySelectorAll("[data-editor-current],[contenteditable]").forEach(
           (n) => {
             n.removeAttribute("data-editor-current");
+            n.removeAttribute("data-editor-drop-target");
+            n.removeAttribute("data-editor-drag-source");
             n.removeAttribute("contenteditable");
           }
         );
@@ -9632,7 +10430,7 @@ property of their respective owners.
           );
         pages.clearTarget();
         host.removeAttribute("data-mobile-nav");
-        viewport.refresh(true);
+        viewport.workspaceActive() ? viewport.focusCurrent() : viewport.refresh(true);
         markActive();
         syncBar();
       }
@@ -9770,9 +10568,11 @@ property of their respective owners.
           "[data-editor-ui], [data-editor-connection], style[data-editor-style], #codex-browser-sidebar-comments-root"
         ).forEach((n) => n.remove());
         [...doc.attributes].filter((a) => /^data-edit/.test(a.name)).forEach((a) => doc.removeAttribute(a.name));
-        doc.querySelectorAll("[contenteditable],[data-editor-current]").forEach((n) => {
+        doc.querySelectorAll("[contenteditable],[data-editor-current],[data-editor-drop-target],[data-editor-drag-source]").forEach((n) => {
           n.removeAttribute("contenteditable");
           n.removeAttribute("data-editor-current");
+          n.removeAttribute("data-editor-drop-target");
+          n.removeAttribute("data-editor-drag-source");
         });
         return "<!DOCTYPE html>\n" + doc.outerHTML;
       }
@@ -9788,6 +10588,7 @@ property of their respective owners.
       function save() {
         crop.finish();
         endText();
+        finishAllShapeParams();
         persistence.save();
       }
       const exportFile = createExporter({
@@ -9834,7 +10635,7 @@ property of their respective owners.
         changed: (value) => {
           S.changed = value;
         },
-        isBusy: () => !!S.drag || crop.active || sourcePending(),
+        isBusy: () => !!S.drag || crop.active || shapePending.size > 0 || sourcePending(),
         hasPendingSource: () => sourcePending() || pages.hasPendingDraft(),
         pause() {
           if (sourcePending() || pages.hasPendingDraft()) return false;
@@ -9926,7 +10727,7 @@ property of their respective owners.
       buildNav();
       markActive();
       setEditing(false);
-      zoomFit();
+      stage.hasAttribute("data-workspace-prototype") ? viewport.view(true) : zoomFit();
       document.readyState === "complete" ? viewport.refresh() : addEventListener("load", () => {
         buildNav();
         viewport.refresh();

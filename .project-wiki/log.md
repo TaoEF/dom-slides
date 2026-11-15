@@ -34,3 +34,4 @@
 | 2026-10-30 | Issue #33 单次审查三项修复：不透明卡片遮住远祖先渐变时保留确定axe事实；原生非文字控件不再把内部value当可见文字；form-only缺标记补TEXT_UNMARKED与不完整覆盖。旧测量接口不变。 |
 
 - 2026-11-09: #35 minimal saved-snapshot inspect/staged sparse edits and #36 independent artboard sizing; bounds and deferred provenance/MCP remain explicit. #37 independent readonly prototype only.
+- 2026-11-09: #37 user feedback shifts prototype validation from view switching to editable same-DOM workspace, cross-artboard movement/reuse, and unchanged original thumbnail navigation; isolated opt-in iteration, not main release.
