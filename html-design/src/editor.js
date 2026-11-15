@@ -410,24 +410,42 @@ import {
     function setMode(b, mode) {
       if (!b || (mode === "artboard") === isArtboard(b)) return;
       endText();
-      mode === "artboard" ? absolutize(b) : restoreFlow(b);
+      if (!(mode === "artboard" ? absolutize(b) : restoreFlow(b))) return;
       drawSel();
       syncBar();
     }
-    // 画板模式：只把顶层 data-el 转成绝对定位；嵌套元素保持内部排版
+    // 手动模式：每个可编辑对象脱离原布局，普通内部 DOM 仍由组件自己的 CSS 排版。
     function absolutize(b) {
-      if (!visible(b)) return alert("这一页当前不可见，请先切换到这一页。");
+      if (!visible(b)) { alert("这一页当前不可见，请先切换到这一页。"); return false; }
       const cs = getComputedStyle(b),
         bw = cs.width,
         bh = cs.height,
         pos = cs.position,
         o = origin(b);
-      const tops = [...b.querySelectorAll("[data-el]")].filter(
-        (el) =>
-          el.parentElement.closest("[data-el],[data-artboard]") === b &&
-          visible(el),
+      const objects = [...b.querySelectorAll("[data-el]")].filter(
+        (el) => !isGroup(el) && visible(el),
       );
-      const m = tops.map((el) => {
+      const wrapperSet = new Set(objects.flatMap((el) => {
+        const ancestors = [];
+        for (let n = el.parentElement; n && n !== b; n = n.parentElement)
+          if (!n.hasAttribute("data-el") && getComputedStyle(n).display !== "contents") ancestors.push(n);
+        return ancestors;
+      }));
+      const wrappers = [...b.querySelectorAll("*")].filter((el) => wrapperSet.has(el));
+      // A static wrapper can anchor positioned pseudo-elements after conversion;
+      // their painted bounds are not exposed as DOM rectangles for rollback checks.
+      if (wrappers.some((el) => getComputedStyle(el).position === "static" &&
+        ["::before", "::after"].some((pseudo) => {
+          const style = getComputedStyle(el, pseudo);
+          return ["absolute", "fixed"].includes(style.position) &&
+            !["none", "normal"].includes(style.content);
+        }))) {
+        alert("这一页含有无法稳定定位的装饰元素，未切换到手动模式。");
+        return false;
+      }
+      const objectSet = new Set(objects);
+      const measured = [...b.querySelectorAll("*")].filter((el) =>
+        wrapperSet.has(el) || objectSet.has(el)).map((el) => {
         const style = getComputedStyle(el);
         const dimension = (axis, sides) =>
           (parseFloat(style[axis]) ||
@@ -441,18 +459,34 @@ import {
                   parseFloat(style[`border${side}Width`]),
                 0,
               ));
+        const r = el.getBoundingClientRect();
         return {
           el,
-          r: el.getBoundingClientRect(),
+          r,
           media: el.matches(MEDIA),
           w: dimension("width", ["Left", "Right"]),
           h: dimension("height", ["Top", "Bottom"]),
         };
       }); // 先量后写，保留元素自身的 transform
-      const els = [b, ...tops];
-      record(
-        els,
-        () => {
+      const visual = [b, ...b.querySelectorAll("*")].filter((el) => el.getClientRects().length).map((el) => ({
+        el, r: el.getBoundingClientRect(),
+      }));
+      const wrapperMeasures = measured.filter(({ el }) => wrapperSet.has(el));
+      const objectMeasures = measured.filter(({ el }) => objectSet.has(el));
+      if (measured.some(({ r, w, h }) => ![r.left, r.top, r.width, r.height, w, h].every(Number.isFinite)) ||
+        wrapperMeasures.some(({ w, h }) => w <= 0 || h <= 0) ||
+        objectMeasures.some(({ el, r, w, h }) =>
+          !elementGeometry(el).supported || r.width <= 0 || r.height <= 0 || w <= 0 || h <= 0)) {
+        alert("这一页含有无法稳定定位的元素，未切换到手动模式。");
+        return false;
+      }
+      const els = [b, ...wrappers, ...objects], before = snap(els);
+      const original = els.map((el) => ({
+        el,
+        style: el.getAttribute("style"),
+        flowStyle: el.getAttribute("data-flow-style"),
+      }));
+      try {
           els.forEach((el) => {
             el.dataset.flowStyle = el.getAttribute("style") || "";
           });
@@ -460,7 +494,13 @@ import {
           b.style.width = bw;
           b.style.height = bh;
           const v = (n) => Math.round(n * 1000) / 1000 + "px";
-          m.forEach(({ el, w, h, media }) => {
+          wrapperMeasures.forEach(({ el, w, h }) => {
+            Object.assign(el.style, {
+              position: "absolute", margin: "0", translate: "none", boxSizing: "border-box",
+              left: "0px", top: "0px", width: v(w), height: v(h),
+            });
+          });
+          objectMeasures.forEach(({ el, w, h, media }) => {
             Object.assign(el.style, {
               position: "absolute",
               margin: "0",
@@ -472,27 +512,56 @@ import {
             });
             el.style[media ? "height" : "minHeight"] = v(h);
           });
-          // An unmarked positioned wrapper can remain the containing block.
-          // Measure after all layout writes, then compensate in document pixels.
-          m.forEach(({ el, r }) => {
+          // 逐层对齐；父容器先恢复原位，再换算子对象的局部 left/top。
+          measured.forEach(({ el, r }) => {
             const zero = el.getBoundingClientRect();
-            el.style.left = v((r.left - zero.left) / o.s);
-            el.style.top = v((r.top - zero.top) / o.s);
+            const delta = inverseDelta(elementGeometry(el).parent, r.left - zero.left, r.top - zero.top);
+            if (!Number.isFinite(delta.x) || !Number.isFinite(delta.y))
+              throw new Error("手动模式无法换算对象位置");
+            el.style.left = v(delta.x);
+            el.style.top = v(delta.y);
           });
+          const tolerance = Math.max(1.5, o.s * .5);
+          if (measured.some(({ el, r }) => {
+            const after = el.getBoundingClientRect();
+            return getComputedStyle(el).position !== "absolute" ||
+              ["left", "top", "width", "height"].some((axis) =>
+                !Number.isFinite(after[axis]) || Math.abs(after[axis] - r[axis]) > tolerance);
+          })) throw new Error("手动模式无法保持当前对象位置");
+          const changedVisual = visual.find(({ el, r }) => {
+            const after = el.getBoundingClientRect();
+            return ["left", "top", "width", "height"].some((axis) =>
+              !Number.isFinite(after[axis]) || Math.abs(after[axis] - r[axis]) > tolerance);
+          });
+          if (changedVisual) throw new Error(`手动模式会改变其他内容的位置: ${changedVisual.el.tagName} ${changedVisual.el.id || changedVisual.el.dataset.el || ""}`);
           b.dataset.mode = "artboard";
-        },
-        b,
-      );
+      } catch (error) {
+        for (const { el, style, flowStyle } of original) {
+          if (flowStyle == null) el.removeAttribute("data-flow-style");
+          else el.setAttribute("data-flow-style", flowStyle);
+          if (style == null) {
+            const attr = el.getAttributeNode("style");
+            if (attr) el.removeAttributeNode(attr);
+          }
+          else el.setAttribute("style", style);
+        }
+        alert(error.message || "手动模式转换失败，已恢复原页面。");
+        return false;
+      }
+      commit(before, b);
+      return true;
     }
     function restoreFlow(b) {
-      if (b.dataset.flowStyle == null)
-        return alert("这一页没有自动排版快照，无法切回自动排版。");
+      if (b.dataset.flowStyle == null) {
+        alert("这一页没有自动排版快照，无法切回自动排版。");
+        return false;
+      }
       if (
         !confirm(
           "切回自动排版会恢复原有布局，手动模式下的拖动会丢失（可以撤销）。继续吗？",
         )
       )
-        return;
+        return false;
       const els = [b, ...b.querySelectorAll("[data-flow-style]")];
       record(
         els,
@@ -506,6 +575,7 @@ import {
         },
         b,
       );
+      return true;
     }
 
     /* ---------- 位置：画板模式用 left/top，排版模式用 translate ---------- */

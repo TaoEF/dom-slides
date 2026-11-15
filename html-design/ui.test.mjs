@@ -296,6 +296,139 @@ test("artboard conversion only touches the current page and preserves positioned
   }
 });
 
+test("manual mode detaches nested editable SVGs and text from a Flex container", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      board.insertAdjacentHTML('beforeend', `<div data-el="workspace" style="display:flex;align-items:center;gap:24px;width:440px;height:140px;margin-top:12px">
+        <svg data-el="rect" viewBox="0 0 80 80" style="display:block;width:80px;height:80px"><rect width="80" height="80" fill="red"/></svg>
+        <svg data-el="arrow" viewBox="0 0 60 60" style="display:block;width:60px;height:60px"><path d="M0 20h35V0l25 30-25 30V40H0z" fill="blue"/></svg>
+        <span data-el="hint">Observe the stroke</span>
+      </div>`);
+    });
+    const ids = ['workspace', 'rect', 'arrow', 'hint'];
+    const box = async (id) => p.locator(`[data-el=${id}]`).boundingBox();
+    const before = await Promise.all(ids.map(box));
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'artboard');
+    for (let i = 0; i < ids.length; i++) {
+      const after = await box(ids[i]);
+      for (const axis of ['x', 'y', 'width', 'height']) near(after[axis], before[i][axis], 1.5);
+      assert.equal(await p.locator(`[data-el=${ids[i]}]`).evaluate((n) => n.style.position), 'absolute');
+    }
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    await p.locator('[data-act=redo]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'artboard');
+    await p.locator('[data-el=rect]').click();
+    await dragHandle(p, 'e', 70, 0);
+    assert.ok((await box('rect')).width > before[1].width + 30);
+    for (let i = 2; i < ids.length; i++) {
+      const after = await box(ids[i]);
+      for (const axis of ['x', 'y']) near(after[axis], before[i][axis], 1.5);
+    }
+    assert.match(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), /data-flow-style=/);
+    p.once('dialog', (dialog) => dialog.accept());
+    await p.locator('[data-act=flow]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    assert.equal(await p.locator('[data-el=arrow]').evaluate((n) => n.style.position), '');
+    assert.equal(await p.locator('[data-el=rect]').evaluate((n) => n.style.width), '80px');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode rejects CSS that prevents independent positioning without partial changes", async () => {
+  const p = await open();
+  try {
+    await p.evaluate(() => {
+      const style = document.createElement('style');
+      style.textContent = '[data-el="p1-title"]{position:static!important}';
+      document.head.append(style);
+    });
+    const beforeHTML = await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML);
+    const before = await p.locator('[data-el=p1-title]').boundingBox();
+    p.once('dialog', (dialog) => dialog.dismiss());
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    const after = await p.locator('[data-el=p1-title]').boundingBox();
+    for (const axis of ['x', 'y', 'width', 'height']) near(after[axis], before[axis], 0.05);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.querySelectorAll('[data-flow-style]').length), 0);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => [n, ...n.querySelectorAll('[data-el]')].every((el) => el.style.length === 0)), true);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), beforeHTML);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode detaches Grid objects inside an unmarked wrapper", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      board.insertAdjacentHTML('beforeend', `<div id="plain-grid" style="display:grid;grid-template-columns:100px 100px;gap:16px;width:216px;height:90px">
+        <div data-el="grid-a" style="background:red;height:80px">A</div>
+        <div data-el="grid-b" style="background:blue;height:80px">B</div>
+      </div>`);
+    });
+    const a = p.locator('[data-el=grid-a]'), b = p.locator('[data-el=grid-b]');
+    const beforeA = await a.boundingBox(), beforeB = await b.boundingBox();
+    const alerts = [];
+    p.on('dialog', (dialog) => { alerts.push(dialog.message()); dialog.dismiss(); });
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'artboard', alerts.join('; '));
+    for (const [node, before] of [[a, beforeA], [b, beforeB]]) {
+      const after = await node.boundingBox();
+      for (const axis of ['x', 'y', 'width', 'height']) near(after[axis], before[axis], 1.5);
+      assert.equal(await node.evaluate((n) => getComputedStyle(n).position), 'absolute');
+    }
+    await a.evaluate((n) => { n.style.width = '180px'; });
+    const afterB = await b.boundingBox();
+    for (const axis of ['x', 'y']) near(afterB[axis], beforeB[axis], 1.5);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode preserves an unmarked absolute decoration beside an editable object", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      board.insertAdjacentHTML('beforeend', `<div id="plain-wrap" style="margin-left:100px;width:220px;height:100px">
+        <div data-el="editable-blue" style="width:90px;height:70px;background:blue">Blue</div>
+        <div id="absolute-red" style="position:absolute;left:40px;top:35px;width:30px;height:30px;background:red"></div>
+      </div>`);
+    });
+    const before = await p.locator('#absolute-red').boundingBox();
+    const beforeHTML = await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML);
+    const alerts = [];
+    p.on('dialog', (dialog) => { alerts.push(dialog.message()); dialog.dismiss(); });
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow', alerts.join('; '));
+    const after = await p.locator('#absolute-red').boundingBox();
+    for (const axis of ['x', 'y', 'width', 'height']) near(after[axis], before[axis], 1.5);
+    assert.equal(await p.locator('#plain-wrap').evaluate((n) => getComputedStyle(n).position), 'static');
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), beforeHTML);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode preserves positioned pseudo decorations on a static wrapper", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      const style = document.createElement('style');
+      style.textContent = '#pseudo-wrap::before{content:"";position:absolute;left:20px;top:20px;width:30px;height:30px;background:red}';
+      document.head.append(style);
+      board.insertAdjacentHTML('beforeend', '<div id="pseudo-wrap"><span data-el="pseudo-child">Decorated</span></div>');
+    });
+    const beforeHTML = await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML);
+    const alerts = [];
+    p.on('dialog', (dialog) => { alerts.push(dialog.message()); dialog.dismiss(); });
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    assert.match(alerts.join('; '), /装饰元素/);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), beforeHTML);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 // This test is geometry/interaction verification; visual review is done separately in one batch.
 test("single page is centered in the available work area, footer owns navigation, and zoom never enters a saved file", async () => {
   const p = await open();
