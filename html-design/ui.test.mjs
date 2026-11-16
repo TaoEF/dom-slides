@@ -1,6 +1,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, rm, mkdir } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { chromium } from "playwright";
 import JSZip from "jszip";
 import { exportDocument, browserOptions } from "./export.mjs";
@@ -50,6 +52,42 @@ test('thumbnail measures each page alone when the stage uses a horizontal Flex r
       assert.equal(await p.locator('html').getAttribute('data-thumb-measuring'), null);
     } finally { await p.close(); }
   }
+});
+
+test('Download HTML embeds the editor, images and linked CSS for offline reopening', async () => {
+  const page = await browser.newPage({ acceptDownloads: true });
+  const folder = await mkdtemp(path.join(os.tmpdir(), 'dom-slides-portable-'));
+  try {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="red"/></svg>';
+    const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/deck.css"></head><body><main data-stage><section data-artboard="p1" data-title="Portable" data-mode="flow"><h1 data-el="title">Offline slide</h1><img data-el="photo" src="/photo.svg" alt="photo"></section></main><script data-editor src="/editor.js"></script></body></html>`;
+    await page.route('http://portable.test/**', route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === '/deck.html') return route.fulfill({ contentType: 'text/html', body: html });
+      if (pathname === '/deck.css') return route.fulfill({ contentType: 'text/css', body: '[data-artboard]{position:relative;width:800px;height:450px;background-image:url("/texture.svg")}h1{font:40px Arial}' });
+      if (pathname === '/editor.js') return route.fulfill({ contentType: 'application/javascript', body: editor });
+      if (['/photo.svg','/texture.svg'].includes(pathname)) return route.fulfill({ contentType: 'image/svg+xml', body: svg });
+      return route.abort();
+    });
+    await page.goto('http://portable.test/deck.html');
+    await page.locator('[data-act=export]').click();
+    const pending = page.waitForEvent('download');
+    await page.locator('[data-act=download]').click();
+    const downloaded = await readFile(await (await pending).path(), 'utf8');
+    assert.doesNotMatch(downloaded, /<script[^>]+src=|<link[^>]+stylesheet|src="\/photo\.svg"|url\("\/texture\.svg"\)/);
+    const file = path.join(folder, 'portable.html');
+    await writeFile(file, downloaded);
+    const offline = await browser.newPage();
+    try {
+      const remote = [];
+      offline.on('request', request => { if (/^https?:/.test(request.url())) remote.push(request.url()); });
+      await offline.goto('file://' + file);
+      await offline.locator('[data-act=edit]').waitFor();
+      assert.equal(await offline.locator('[data-artboard]').evaluate(node => node.offsetWidth), 800);
+      assert.equal(await offline.locator('img[data-el=photo]').evaluate(node => node.complete && node.naturalWidth > 0 && node.src.startsWith('data:')), true);
+      assert.equal(await offline.locator('[data-act=edit]').isEnabled(), true);
+      assert.deepEqual(remote, []);
+    } finally { await offline.close(); }
+  } finally { await page.close(); await rm(folder, { recursive: true, force: true }); }
 });
 async function current(p) {
   return p.locator("[data-editor-current]").getAttribute("data-artboard");

@@ -7,7 +7,7 @@ owners:
   - html-design/pptx.mjs
   - html-design/src/export.js
   - html-design/export-cli.mjs
-updated: 2026-10-30
+updated: 2026-11-16
 sources:
   - path: html-design/export.mjs
     status: current
@@ -18,6 +18,8 @@ sources:
   - path: html-design/src/geometry.js
     status: current
   - path: html-design/src/export.js
+    status: current
+  - path: html-design/src/portable-html.js
     status: current
   - path: html-design/export.test.mjs
     status: current
@@ -52,7 +54,11 @@ confidence: high
 
 导出不重新读取旧磁盘 HTML。脚本通过 CSP 禁止执行，等待字体图片；最多 100 页，尺寸 1–4096px。PDF 允许逐页不同尺寸；PPTX 页面宽高比须一致。普通文字与 img 不整页扁平化；SVG/canvas 可转为图片。
 
-PPTX 每个文字元素对应一个可编辑文本框，开启 `wrap="square"`，不自动缩小字号或按文字撑宽。只保留 HTML 的显式换行（br、块段落、white-space 保留的换行），不将浏览器因当前宽度产生的软折行固化。普通空白按 CSS 合并，跨 span 保留词间空格，pre/pre-wrap/break-spaces 保留空格。富文本样式继续按 run 映射，混合字号或基线差异不能凭字符几何位置推断换行。Flex/Grid 子项会被浏览器块化，横排子项不能因此各自变成硬段落；正 column-gap 简化为词间空格，Flex column 子项保留纵向分隔。
+「导出 → 下载 HTML」使用点击时的序列化 DOM，将可读取的图片、CSS（含 url() 字体和背景资源）及外部编辑器脚本内联为单文件；链接改为绝对 URL。资源读取失败、暂不支持的媒体嵌入或 CSS @import 会中止下载，避免发出表面成功但离线缺失内容的文件。普通保存与源码下载仍保持源文件引用，不承担离线打包语义。
+
+PPTX 每个文字元素对应一个可编辑文本框。普通段落开启 `wrap="square"`，不自动缩小字号或按文字撑宽；浏览器实际单行的原生 inline-block 短标签使用 `wrap="none"` 与 shrink，避免 PowerPoint 字体度量差异把按钮文字拆成两行。只保留 HTML 的显式换行（br、块段落、white-space 保留的换行），不将浏览器因当前宽度产生的软折行固化。普通空白按 CSS 合并，跨 span 保留词间空格，pre/pre-wrap/break-spaces 保留空格。富文本样式继续按 run 映射，混合字号或基线差异不能凭字符几何位置推断换行。Flex/Grid 子项会被浏览器块化，横排子项不能因此各自变成硬段落；正 column-gap 简化为词间空格，Flex column 子项保留纵向分隔。
+
+完全位于 `overflow:hidden/clip/scroll/auto` 祖先可见范围之外的对象在 PPTX 收集阶段跳过，避免原 HTML 中被容器遮住的形状重新出现在幻灯片上；横向与纵向分别按其 overflow 值判断。此规则只处理完全不可见对象；部分越界的祖先裁切仍是现有映射边界，不能宣称与浏览器像素一致。
 
 
 四边宽度、颜色/透明度一致且为可见实线，配合可可靠表达的统一圆角和可靠的2D旋转/正向均匀缩放几何时，容器背景与边框使用同一个原生 shape；透明背景也保留边框，无边框或全透明边框不发出冗余边线。CSS 边框位于 border-box 内，原生 stroke 的中心线内缩半边宽；圆角使用 PptxGenJS 4 的 `rectRadius`（英寸），减去内缩后写入实际 DrawingML adjustment。胶囊形保留 roundRect，不误作 ellipse；全椭圆可映射为 ellipse。

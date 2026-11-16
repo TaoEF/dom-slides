@@ -187,18 +187,56 @@ test('cross-tab paste rebases relative links and rekeys SVG references', async (
   } finally { await c.close(); }
 });
 
-test('clipping or picture ancestors reject copying before a visual mismatch can occur', async () => {
+test('crop frames and masked images copy as editable images; a failed copy clears the previous packet', async () => {
   const c = await context(), p = await open(c);
   try {
     await p.locator('[data-artboard=p1]').evaluate((board, src) => {
-      board.insertAdjacentHTML('beforeend', `<div style="width:80px;height:60px;overflow:hidden"><img data-el="clipped" src="${src}" alt="clipped"></div><picture><source srcset="${src}"><img data-el="picture-image" src="${src}" alt="picture"></picture>`);
+      board.insertAdjacentHTML('beforeend', `<div style="position:absolute;left:130px;top:235px;width:180px;height:120px;overflow:hidden;border-radius:20px"><span data-el="inner-crop" data-crop-frame="1" style="position:absolute;left:45px;top:25px;display:block;width:80px;height:60px;overflow:clip"><img data-crop-image="" src="${src}" style="display:block;width:100%;height:100%;object-fit:cover"></span></div><div style="position:absolute;left:330px;top:235px;width:80px;height:60px;overflow:hidden;border-radius:12px"><img data-el="clipped" src="${src}" alt="clipped" style="display:block;width:80px;height:60px;object-fit:cover;translate:-2px"></div><picture style="position:absolute;left:430px;top:235px"><source srcset="${src}"><img data-el="picture-image" src="${src}" alt="picture" style="width:80px;height:60px"></picture>`);
     }, image);
+    await p.locator('[data-el=inner-crop]').click();
+    await p.keyboard.press('ControlOrMeta+C');
+    await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    await p.keyboard.press('ControlOrMeta+V');
+    assert.equal(await p.locator('[data-artboard=p2] [data-crop-frame] > img[data-crop-image]').count(), 1);
+    await p.locator('.thumb[data-page-id=p1] .thumb-main').click();
+    await p.locator('[data-el=clipped]').click();
+    const sourceOffset = await p.locator('[data-el=clipped]').evaluate(node => {
+      const a = node.getBoundingClientRect(), b = node.parentElement.getBoundingClientRect();
+      return [a.left - b.left, a.top - b.top];
+    });
+    await p.keyboard.press('ControlOrMeta+C');
+    await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    await p.keyboard.press('ControlOrMeta+V');
+    const copiedFrame = p.locator('[data-artboard=p2] > [data-crop-frame][data-el]').last();
+    assert.equal(await copiedFrame.locator('img[data-crop-image]').count(), 1);
+    assert.equal(await copiedFrame.evaluate(node => getComputedStyle(node).borderRadius), '12px');
+    const copiedOffset = await copiedFrame.evaluate(node => {
+      const a = node.firstElementChild.getBoundingClientRect(), b = node.getBoundingClientRect();
+      return [a.left - b.left, a.top - b.top];
+    });
+    assert.ok(copiedOffset.every((value, i) => Math.abs(value - sourceOffset[i]) < .5));
+    await p.locator('.thumb[data-page-id=p1] .thumb-main').click();
+    await p.locator('[data-el=clipped]').evaluate(node => { node.style.translate = 'none'; });
     await p.locator('[data-el=clipped]').click();
     await p.keyboard.press('ControlOrMeta+C');
-    assert.match(await p.locator('.toast').textContent(), /外层蒙版/);
+    await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    await p.keyboard.press('ControlOrMeta+V');
+    const copiedImage = p.locator('[data-artboard=p2] > img[data-el]');
+    assert.equal(await copiedImage.count(), 1);
+    assert.equal(await copiedImage.evaluate(node => getComputedStyle(node).borderRadius), '12px');
+    await copiedImage.click();
+    await p.locator('[data-act=image-crop]').click();
+    assert.equal(await p.locator('.crop-panel').isVisible(), true);
+    await p.locator('[data-act=crop-cancel]').click();
+    await p.locator('.thumb[data-page-id=p1] .thumb-main').click();
     await p.locator('[data-el=picture-image]').click();
     await p.keyboard.press('ControlOrMeta+C');
     assert.match(await p.locator('.toast').textContent(), /picture/);
+    await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    await p.keyboard.press('ControlOrMeta+V');
+    assert.match(await p.locator('.toast').textContent(), /上次复制未成功/);
+    assert.equal(await p.locator('[data-artboard=p2] [data-crop-frame]').count(), 2);
+    assert.equal(await p.locator('[data-artboard=p2] > img[data-el]').count(), 1);
     assert.deepEqual(p.errors, []);
   } finally { await c.close(); }
 });

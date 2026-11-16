@@ -609,18 +609,64 @@ property of their respective owners.
       ...new Set(roots.flatMap((n) => [n, ...n.querySelectorAll("*")]))
     ];
     const ignored = /^(cursor|user-select|-webkit-user-select|caret-color|pointer-events|animation.*|transition.*)$/;
-    function capture(roots) {
+    const clipsOverflow = (value) => ["hidden", "clip", "scroll", "auto"].includes(value);
+    function paintBounds(node) {
+      let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+      const visit = (current) => {
+        const style2 = getComputedStyle(current);
+        if (!current.getClientRects().length || style2.display === "none" || style2.visibility === "hidden") return;
+        const rect = current.getBoundingClientRect();
+        left = Math.min(left, rect.left);
+        top = Math.min(top, rect.top);
+        right = Math.max(right, rect.right);
+        bottom = Math.max(bottom, rect.bottom);
+        if (clipsOverflow(style2.overflowX) && clipsOverflow(style2.overflowY)) return;
+        for (const child of current.children) visit(child);
+      };
+      visit(node);
+      return { left, top, right, bottom };
+    }
+    function clipAffects(node, ancestor, style2 = getComputedStyle(ancestor)) {
+      if (style2.clipPath !== "none" || style2.maskImage !== "none") return true;
+      if (!clipsOverflow(style2.overflowX) && !clipsOverflow(style2.overflowY)) return false;
+      const r = paintBounds(node), outer = ancestor.getBoundingClientRect(), left = outer.left + (parseFloat(style2.borderLeftWidth) || 0), top = outer.top + (parseFloat(style2.borderTopWidth) || 0), right = outer.right - (parseFloat(style2.borderRightWidth) || 0), bottom = outer.bottom - (parseFloat(style2.borderBottomWidth) || 0), radius = (side) => {
+        const value = style2[`border${side}Radius`], n = parseFloat(value) || 0;
+        return value.includes("%") ? n * Math.min(right - left, bottom - top) / 100 : n;
+      }, tl = radius("TopLeft"), tr = radius("TopRight"), br = radius("BottomRight"), bl = radius("BottomLeft");
+      if (clipsOverflow(style2.overflowX) && (r.left < left - 0.5 || r.right > right + 0.5)) return true;
+      if (clipsOverflow(style2.overflowY) && (r.top < top - 0.5 || r.bottom > bottom + 0.5)) return true;
+      if (tl && r.left < left + tl && r.top < top + tl) return true;
+      if (tr && r.right > right - tr && r.top < top + tr) return true;
+      if (br && r.right > right - br && r.bottom > bottom - br) return true;
+      if (bl && r.left < left + bl && r.bottom > bottom - bl) return true;
+      return false;
+    }
+    function singleImageMask(image, parent) {
+      if (!image.matches("img[data-el]") || !parent || parent.matches("[data-el],picture,[data-artboard]") || parent.children.length !== 1 || parent.firstElementChild !== image || parent.textContent.trim()) return false;
+      const style2 = getComputedStyle(parent);
+      return clipsOverflow(style2.overflowX) && clipsOverflow(style2.overflowY) && style2.clipPath === "none" && style2.maskImage === "none" && style2.filter === "none" && style2.boxShadow === "none" && style2.opacity === "1" && ["Top", "Right", "Bottom", "Left"].every((side) => !parseFloat(style2[`border${side}Width`]) && !parseFloat(style2[`padding${side}`])) && ["::before", "::after"].every((pseudo) => ["none", "normal"].includes(getComputedStyle(parent, pseudo).content));
+    }
+    function sameBox(a, b) {
+      const x = a.getBoundingClientRect(), y = b.getBoundingClientRect();
+      return ["left", "top", "right", "bottom"].every((key) => Math.abs(x[key] - y[key]) < 0.5);
+    }
+    function capture(roots, { clipboard = false } = {}) {
       roots = selectionRoots(roots);
       if (!roots.length) throw new Error("请先选择元素");
       if (all(roots).length > 500)
         throw new Error("原型暂支持一次复用最多 500 个节点");
-      const bounds = unionRect(roots), zoom = S.zoom;
-      const objects = roots.map((source) => {
+      const zoom = S.zoom;
+      const objects = roots.map((selected) => {
+        const parent = selected.parentElement;
+        const imageMask = clipboard && singleImageMask(selected, parent) && clipAffects(selected, parent);
+        const flatImageMask = imageMask && sameBox(selected, parent);
+        const framedImageMask = imageMask && !flatImageMask;
+        const source = framedImageMask ? parent : selected;
         for (let ancestor = source.parentElement; ancestor && !ancestor.matches("[data-artboard]"); ancestor = ancestor.parentElement) {
           if (ancestor.matches("picture"))
             throw new Error("图片依赖 picture 来源，暂不能单独跨页复制");
-          const style2 = getComputedStyle(ancestor);
-          if (["overflowX", "overflowY"].some((key) => ["hidden", "clip", "scroll", "auto"].includes(style2[key])) || style2.clipPath !== "none" || style2.maskImage !== "none")
+          if (flatImageMask && ancestor === parent) continue;
+          if (clipAffects(source, ancestor))
             throw new Error("对象受外层蒙版裁切，暂不能单独跨页复制");
         }
         const template = source.cloneNode(true), originals = [source, ...source.querySelectorAll("*")], copies = [template, ...template.querySelectorAll("*")], pairs = new Map(originals.map((n, i) => [n, copies[i]]));
@@ -660,6 +706,15 @@ property of their respective owners.
             );
           }
         }
+        if (flatImageMask)
+          template.style.setProperty("border-radius", getComputedStyle(parent).borderRadius);
+        if (framedImageMask) {
+          template.dataset.el = selected.dataset.el;
+          template.dataset.cropFrame = "1";
+          const image = pairs.get(selected);
+          image.removeAttribute("data-el");
+          image.dataset.cropImage = "";
+        }
         const leaves = groupRoots([source]).map((node) => {
           const g = elementGeometry(node);
           if (!g.supported) throw new Error("这种变换暂不支持跨画布复用");
@@ -678,6 +733,7 @@ property of their respective owners.
         });
         return { source, template, pairs, leaves, frames };
       });
+      const bounds = unionRect(objects.map((object) => object.source));
       return {
         objects,
         zoom,
@@ -791,7 +847,8 @@ property of their respective owners.
           "opacity",
           "object-fit",
           "object-position",
-          "box-shadow"
+          "box-shadow",
+          "border-radius"
         ];
         for (let i = 0; i < result.length; i++) {
           const templates = [
@@ -946,7 +1003,7 @@ property of their respective owners.
     function copyEvent(event) {
       if (!canEdit() || !S.selection.length || S.text || editableTarget(event)) return false;
       try {
-        const packet = capture(S.selection);
+        const packet = capture(S.selection, { clipboard: true });
         const data = JSON.stringify({
           app: "dom-slides",
           version: 1,
@@ -974,6 +1031,15 @@ property of their respective owners.
         toast("已复制元素 · 可粘贴到其他页面或标签页");
         return true;
       } catch (error) {
+        event.clipboardData?.setData(CLIPBOARD_TYPE, JSON.stringify({
+          app: "dom-slides",
+          version: 1,
+          origin: location.origin,
+          failed: true
+        }));
+        event.clipboardData?.setData("text/plain", "");
+        event.preventDefault();
+        event.stopImmediatePropagation();
         toast(error.message, 4500);
         return false;
       }
@@ -982,6 +1048,8 @@ property of their respective owners.
     function readPacket(data) {
       if (!data || data.length > CLIPBOARD_LIMIT) throw new Error("剪贴板内容无效或过大");
       const wire = JSON.parse(data);
+      if (wire.app === "dom-slides" && wire.version === 1 && wire.origin === location.origin && wire.failed)
+        throw new Error("上次复制未成功，请重新选择对象");
       if (wire.app !== "dom-slides" || wire.version !== 1 || wire.origin !== location.origin || !Number.isFinite(wire.zoom) || wire.zoom <= 0 || !Number.isFinite(wire.cx) || !Number.isFinite(wire.cy) || !Array.isArray(wire.objects) || !wire.objects.length || wire.objects.length > 100)
         throw new Error("剪贴板对象格式不受支持");
       let count = 0;
@@ -1055,6 +1123,87 @@ property of their respective owners.
       return true;
     }
     return { enabled, begin, move, drop, clear, copyEvent, pasteEvent };
+  }
+
+  // html-design/src/portable-html.js
+  async function portableHTML(html, { baseURL, liveImages = [] }) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const cache = /* @__PURE__ */ new Map();
+    let total = 0;
+    const absolute = (value, base = baseURL) => new URL(value, base).href;
+    const resource = async (value, base = baseURL) => {
+      if (/^(?:data:|#)/i.test(value)) return value;
+      const url = absolute(value, base);
+      if (!cache.has(url)) cache.set(url, (async () => {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`资源读取失败：${new URL(url).pathname}`);
+        const blob = await response.blob();
+        total += blob.size;
+        if (total > 64 * 1024 * 1024) throw new Error("HTML 资源超过 64 MB，请减少图片后重试");
+        return await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error("资源编码失败"));
+          reader.readAsDataURL(blob);
+        });
+      })());
+      return cache.get(url);
+    };
+    const css = async (value, base = baseURL) => {
+      if (/@import\b/i.test(value)) throw new Error("CSS @import 暂不能打包为单文件 HTML");
+      const urls = [...value.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)/gi)];
+      let output = value;
+      for (const match of urls) {
+        const ref = (match[1] ?? match[2] ?? match[3]).trim();
+        if (!ref || /^(?:data:|#)/i.test(ref)) continue;
+        output = output.replace(match[0], `url("${await resource(ref, base)}")`);
+      }
+      return output;
+    };
+    for (const link of [...doc.querySelectorAll('link[rel~="stylesheet"][href]')]) {
+      const url = absolute(link.getAttribute("href"));
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`样式表读取失败：${new URL(url).pathname}`);
+      const style2 = doc.createElement("style");
+      style2.textContent = await css(await response.text(), url);
+      link.replaceWith(style2);
+    }
+    for (const style2 of doc.querySelectorAll("style")) style2.textContent = await css(style2.textContent);
+    for (const node of doc.querySelectorAll("[style]")) node.setAttribute("style", await css(node.getAttribute("style")));
+    const images = [...doc.querySelectorAll("img")];
+    for (const [index, image] of images.entries()) {
+      const src = liveImages[index]?.currentSrc || image.getAttribute("src");
+      if (!src) continue;
+      image.setAttribute("src", await resource(src));
+      image.removeAttribute("srcset");
+      image.removeAttribute("sizes");
+      image.closest("picture")?.querySelectorAll("source").forEach((source) => source.remove());
+    }
+    for (const image of doc.querySelectorAll("svg image")) {
+      const href = image.getAttribute("href") || image.getAttribute("xlink:href");
+      if (href && !href.startsWith("#")) {
+        const data = await resource(href);
+        image.setAttribute("href", data);
+        image.removeAttribute("xlink:href");
+      }
+    }
+    for (const script of doc.querySelectorAll("script[src]")) {
+      const url = absolute(script.getAttribute("src"));
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`脚本读取失败：${new URL(url).pathname}`);
+      script.removeAttribute("src");
+      script.removeAttribute("integrity");
+      script.removeAttribute("crossorigin");
+      script.textContent = (await response.text()).replace(/<\/script/gi, "<\\/script");
+    }
+    if (doc.querySelector("video[src],video source[src],audio[src],audio source[src],iframe[src],object[data],embed[src]"))
+      throw new Error("此页面含暂不能打包的媒体或嵌入资源");
+    for (const link of doc.querySelectorAll("a[href]")) {
+      const href = link.getAttribute("href");
+      if (href && !/^(?:#|data:|javascript:|mailto:|tel:)/i.test(href)) link.setAttribute("href", absolute(href));
+    }
+    doc.querySelectorAll("base").forEach((base) => base.remove());
+    return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
   }
 
   // html-design/src/crop-geometry.js
@@ -10233,7 +10382,15 @@ property of their respective owners.
         },
         "rotation-reset": () => rotateTo(0),
         save: () => save(),
-        download: () => download(serialize()),
+        download: async () => {
+          try {
+            const html = serialize();
+            download(await portableHTML(html, { baseURL: document.baseURI, liveImages: [...root.querySelectorAll("img")] }));
+            toast("已下载可离线 HTML");
+          } catch (error) {
+            toast(`HTML 下载失败：${error.message}`, 5e3);
+          }
+        },
         copy: () => copyText(serialize()),
         print: doPrint,
         conflict: () => persistence.conflict(),

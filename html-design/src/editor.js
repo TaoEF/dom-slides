@@ -1,4 +1,5 @@
 import { createWorkspaceTransfer } from "./workspace-transfer.js";
+import { portableHTML } from "./portable-html.js";
 import { selectionFrame, frameCorner, resizeCursor, sameSelection, rotationGroups, groupLocalAngle, writeGroupAngle } from './oriented-selection.js';
 import { isGroup, groupRoots, objectRect, logicalTarget, groupProblem, groupStructureProblem, stableGroupMarkup, layoutProbe } from "./groups.js";
 import { createCrop, cropImage } from './crop.js';
@@ -1904,7 +1905,15 @@ import {
       },
       'rotation-reset': () => rotateTo(0),
       save: () => save(),
-      download: () => download(serialize()),
+      download: async () => {
+        try {
+          const html = serialize();
+          download(await portableHTML(html, { baseURL: document.baseURI, liveImages: [...root.querySelectorAll('img')] }));
+          toast('已下载可离线 HTML');
+        } catch (error) {
+          toast(`HTML 下载失败：${error.message}`, 5000);
+        }
+      },
       copy: () => copyText(serialize()),
       print: doPrint,
       conflict: () => persistence.conflict(),

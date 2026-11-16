@@ -74,10 +74,23 @@ export function collectEditableSlide(board) {
     return cs.writingMode !== 'horizontal-tb' ? 'top' : anchor(alignment, reversed);
   };
   const graphics = [...board.querySelectorAll('svg,canvas')];
+  const outsideClippingAncestor = el => {
+    const box = el.getBoundingClientRect();
+    for (let ancestor = el.parentElement; ancestor && ancestor !== board; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor);
+      const clipsX = ['hidden', 'clip', 'scroll', 'auto'].includes(style.overflowX);
+      const clipsY = ['hidden', 'clip', 'scroll', 'auto'].includes(style.overflowY);
+      if (!clipsX && !clipsY) continue;
+      const clip = ancestor.getBoundingClientRect();
+      if ((clipsX && (box.right <= clip.left || box.left >= clip.right)) ||
+          (clipsY && (box.bottom <= clip.top || box.top >= clip.bottom))) return true;
+    }
+    return false;
+  };
   for (const el of board.querySelectorAll('*')) {
     if ((el.matches('img[data-crop-image]') && el.parentElement?.matches('[data-crop-frame="1"]')) || (el.closest('svg') && !el.matches('svg'))) continue;
     const cs = getComputedStyle(el), box = rect(el);
-    if (!el.getClientRects().length || cs.visibility === 'hidden' || cs.opacity === '0' || !box.w || !box.h) continue;
+    if (!el.getClientRects().length || cs.visibility === 'hidden' || cs.opacity === '0' || !box.w || !box.h || outsideClippingAncestor(el)) continue;
     const name = el.dataset.el || el.className?.baseVal || String(el.className || el.tagName);
     const fill = cssColor(cs.backgroundColor);
     const sides = ['Top', 'Right', 'Bottom', 'Left'].map(side => ({
@@ -233,8 +246,15 @@ export function collectEditableSlide(board) {
         if (block) { pendingSpace = null; pendingBlockBreak = true; }
       };
       visit(el);
+      const textRange = document.createRange();
+      textRange.selectNodeContents(el);
+      const lineRects = [...textRange.getClientRects()].filter(rect => rect.width && rect.height);
+      const intrinsicOneLine = cs.display === 'inline-block' && el.childNodes.length === 1 &&
+        el.firstChild.nodeType === Node.TEXT_NODE && !runs.some(run => run.text.includes('\n')) &&
+        lineRects.length === 1;
       if (runs.length) emit(el, {
         kind: 'text', ...box, name, runs, ...baseStyle,
+        nowrap: intrinsicOneLine,
         align: ['left', 'center', 'right', 'justify'].includes(cs.textAlign) ? cs.textAlign : 'left',
         valign: textVertical(el, cs, name, textItems),
         lineHeight: (parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2) * box.scale,
@@ -311,7 +331,8 @@ export async function addEditableSlide({ pptx, slide, data, page, board, context
         ...position, ...textOptions(item),
         x: position.x, y: position.y, w: position.w, h: position.h,
         // PptxGenJS 4 serializes text margins as left/right/bottom/top.
-        margin: [item.padding[3], item.padding[1], item.padding[2], item.padding[0]].map(pt), valign: item.valign, fit: 'none', wrap: true,
+        margin: [item.padding[3], item.padding[1], item.padding[2], item.padding[0]].map(pt), valign: item.valign,
+        fit: item.nowrap ? 'shrink' : 'none', wrap: !item.nowrap,
         lineSpacing: pt(item.lineHeight), paraSpaceBefore: 0, paraSpaceAfter: 0,
         lang: 'zh-CN',
       });

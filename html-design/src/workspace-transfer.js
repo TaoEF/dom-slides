@@ -29,20 +29,75 @@ export function createWorkspaceTransfer({
   ];
   const ignored =
     /^(cursor|user-select|-webkit-user-select|caret-color|pointer-events|animation.*|transition.*)$/;
-  function capture(roots) {
+  const clipsOverflow = value => ['hidden', 'clip', 'scroll', 'auto'].includes(value);
+  function paintBounds(node) {
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    const visit = current => {
+      const style = getComputedStyle(current);
+      if (!current.getClientRects().length || style.display === 'none' || style.visibility === 'hidden') return;
+      const rect = current.getBoundingClientRect();
+      left = Math.min(left, rect.left); top = Math.min(top, rect.top);
+      right = Math.max(right, rect.right); bottom = Math.max(bottom, rect.bottom);
+      if (clipsOverflow(style.overflowX) && clipsOverflow(style.overflowY)) return;
+      for (const child of current.children) visit(child);
+    };
+    visit(node);
+    return { left, top, right, bottom };
+  }
+  function clipAffects(node, ancestor, style = getComputedStyle(ancestor)) {
+    if (style.clipPath !== 'none' || style.maskImage !== 'none') return true;
+    if (!clipsOverflow(style.overflowX) && !clipsOverflow(style.overflowY)) return false;
+    const r = paintBounds(node), outer = ancestor.getBoundingClientRect(),
+      left = outer.left + (parseFloat(style.borderLeftWidth) || 0),
+      top = outer.top + (parseFloat(style.borderTopWidth) || 0),
+      right = outer.right - (parseFloat(style.borderRightWidth) || 0),
+      bottom = outer.bottom - (parseFloat(style.borderBottomWidth) || 0),
+      radius = side => {
+        const value = style[`border${side}Radius`], n = parseFloat(value) || 0;
+        return value.includes('%') ? n * Math.min(right - left, bottom - top) / 100 : n;
+      },
+      tl = radius('TopLeft'), tr = radius('TopRight'),
+      br = radius('BottomRight'), bl = radius('BottomLeft');
+    if (clipsOverflow(style.overflowX) && (r.left < left - .5 || r.right > right + .5)) return true;
+    if (clipsOverflow(style.overflowY) && (r.top < top - .5 || r.bottom > bottom + .5)) return true;
+    if (tl && r.left < left + tl && r.top < top + tl) return true;
+    if (tr && r.right > right - tr && r.top < top + tr) return true;
+    if (br && r.right > right - br && r.bottom > bottom - br) return true;
+    if (bl && r.left < left + bl && r.bottom > bottom - bl) return true;
+    return false;
+  }
+  function singleImageMask(image, parent) {
+    if (!image.matches('img[data-el]') || !parent || parent.matches('[data-el],picture,[data-artboard]') ||
+      parent.children.length !== 1 || parent.firstElementChild !== image || parent.textContent.trim()) return false;
+    const style = getComputedStyle(parent);
+    return clipsOverflow(style.overflowX) && clipsOverflow(style.overflowY) &&
+      style.clipPath === 'none' && style.maskImage === 'none' && style.filter === 'none' &&
+      style.boxShadow === 'none' && style.opacity === '1' &&
+      ['Top','Right','Bottom','Left'].every(side =>
+        !parseFloat(style[`border${side}Width`]) && !parseFloat(style[`padding${side}`])) &&
+      ['::before','::after'].every(pseudo => ['none','normal'].includes(getComputedStyle(parent, pseudo).content));
+  }
+  function sameBox(a, b) {
+    const x = a.getBoundingClientRect(), y = b.getBoundingClientRect();
+    return ['left', 'top', 'right', 'bottom'].every(key => Math.abs(x[key] - y[key]) < .5);
+  }
+  function capture(roots, { clipboard = false } = {}) {
     roots = selectionRoots(roots);
     if (!roots.length) throw new Error("请先选择元素");
     if (all(roots).length > 500)
       throw new Error("原型暂支持一次复用最多 500 个节点");
-    const bounds = unionRect(roots),
-      zoom = S.zoom;
-    const objects = roots.map((source) => {
+    const zoom = S.zoom;
+    const objects = roots.map((selected) => {
+      const parent = selected.parentElement;
+      const imageMask = clipboard && singleImageMask(selected, parent) && clipAffects(selected, parent);
+      const flatImageMask = imageMask && sameBox(selected, parent);
+      const framedImageMask = imageMask && !flatImageMask;
+      const source = framedImageMask ? parent : selected;
       for (let ancestor = source.parentElement; ancestor && !ancestor.matches('[data-artboard]'); ancestor = ancestor.parentElement) {
         if (ancestor.matches('picture'))
           throw new Error('图片依赖 picture 来源，暂不能单独跨页复制');
-        const style = getComputedStyle(ancestor);
-        if (['overflowX', 'overflowY'].some(key => ['hidden', 'clip', 'scroll', 'auto'].includes(style[key])) ||
-          style.clipPath !== 'none' || style.maskImage !== 'none')
+        if (flatImageMask && ancestor === parent) continue;
+        if (clipAffects(source, ancestor))
           throw new Error('对象受外层蒙版裁切，暂不能单独跨页复制');
       }
       const template = source.cloneNode(true),
@@ -86,6 +141,15 @@ export function createWorkspaceTransfer({
           );
         }
       }
+      if (flatImageMask)
+        template.style.setProperty('border-radius', getComputedStyle(parent).borderRadius);
+      if (framedImageMask) {
+        template.dataset.el = selected.dataset.el;
+        template.dataset.cropFrame = '1';
+        const image = pairs.get(selected);
+        image.removeAttribute('data-el');
+        image.dataset.cropImage = '';
+      }
       const leaves = groupRoots([source]).map((node) => {
         const g = elementGeometry(node);
         if (!g.supported) throw new Error("这种变换暂不支持跨画布复用");
@@ -106,6 +170,7 @@ export function createWorkspaceTransfer({
       });
       return { source, template, pairs, leaves, frames };
     });
+    const bounds = unionRect(objects.map(object => object.source));
     return {
       objects,
       zoom,
@@ -231,6 +296,7 @@ export function createWorkspaceTransfer({
         "object-fit",
         "object-position",
         "box-shadow",
+        "border-radius",
       ];
       for (let i = 0; i < result.length; i++) {
         const templates = [
@@ -408,7 +474,7 @@ export function createWorkspaceTransfer({
   function copyEvent(event) {
     if (!canEdit() || !S.selection.length || S.text || editableTarget(event)) return false;
     try {
-      const packet = capture(S.selection);
+      const packet = capture(S.selection, { clipboard: true });
       const data = JSON.stringify({
         app: 'dom-slides', version: 1, origin: location.origin,
         zoom: packet.zoom, cx: packet.cx, cy: packet.cy,
@@ -432,6 +498,13 @@ export function createWorkspaceTransfer({
       toast("已复制元素 · 可粘贴到其他页面或标签页");
       return true;
     } catch (error) {
+      // A failed second copy must replace the previous object packet too.
+      event.clipboardData?.setData(CLIPBOARD_TYPE, JSON.stringify({
+        app: 'dom-slides', version: 1, origin: location.origin, failed: true,
+      }));
+      event.clipboardData?.setData('text/plain', '');
+      event.preventDefault();
+      event.stopImmediatePropagation();
       toast(error.message, 4500);
       return false;
     }
@@ -441,6 +514,8 @@ export function createWorkspaceTransfer({
   function readPacket(data) {
     if (!data || data.length > CLIPBOARD_LIMIT) throw new Error('剪贴板内容无效或过大');
     const wire = JSON.parse(data);
+    if (wire.app === 'dom-slides' && wire.version === 1 && wire.origin === location.origin && wire.failed)
+      throw new Error('上次复制未成功，请重新选择对象');
     if (wire.app !== 'dom-slides' || wire.version !== 1 || wire.origin !== location.origin ||
       !Number.isFinite(wire.zoom) || wire.zoom <= 0 || !Number.isFinite(wire.cx) || !Number.isFinite(wire.cy) ||
       !Array.isArray(wire.objects) || !wire.objects.length || wire.objects.length > 100)
