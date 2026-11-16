@@ -91,6 +91,7 @@ body{margin:0;background:#e9e9ec;font-family:var(--font);color:var(--text)}
 - 不要让页面自己隐藏非当前页（比如 `.slide{display:none} .slide.active{display:block}`）。编辑器默认只显示当前页，它会给当前页加上 `data-editor-current` 属性。如果确实需要自己的翻页逻辑，就监听 `editor:goto` 事件。
 - 文字放在 `data-el` 元素里，不要再嵌套 `data-el`。嵌套了 `data-el` 的元素不能直接改字。
 - 图片用 `<img data-el>`，这样才能双击裁切、通过工具条替换、拖动改大小。
+- 独立可移动的图片只由该 `img` 自己（`object-fit`、`object-position`、`border-radius`）或编辑器已有的 `data-crop-frame` 承担可见裁切。布局包装层可以存在，但不要再用未标记祖先的 `overflow:hidden/clip`、`clip-path` 或 `mask` 裁切图片；否则拖动的是图片，留在原处的外层蒙版会截断它。用户明确要求整个组合共用蒙版时，按组合的编辑行为单独设计。
 
 ## 5. 脚本规则
 
@@ -169,6 +170,7 @@ AI 经协作 `commit` 后，待审阅页底显示「放弃｜接受」：悬停�
 - [ ] 内容自身不隐藏非当前页，页面显隐由编辑器管理；内容没有依赖 JS 才显示的效果
 - [ ] 交互脚本可以重复运行，加载时不生成 `data-el` 元素
 - [ ] 内容没有超出页面尺寸（文字不溢出、元素不越界）
+- [ ] 对独立图片实际试一次选择、移动和改大小：没有第二层未标记蒙版截断图片，编辑器裁切框与图片仍作为同一对象操作
 
 ## 10. 交付
 

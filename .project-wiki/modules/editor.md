@@ -5,7 +5,7 @@ status: active
 owners:
   - html-design/src/
   - html-design/editor.js
-updated: 2026-11-09
+updated: 2026-11-16
 sources:
   - path: html-design/src/editor.js
     status: current
@@ -130,6 +130,8 @@ crop.js 负责有限 cover/pan/resize 数学和裁切会话。有效操作才将
 会话局部历史按有效手势存结构+属性快照，不进入主 Undo/dirty。完成时逐项合入主历史，取消还原进入状态并丢弃局部记录；Undo 首次迁移恢复原 img，Redo 同一节点回框。无操作/夹住/回起点不迁移；拖框用局部逆变换和实际中心补偿锁定对侧锚点，旋转和非中心 origin 不用 BCR 当原尺寸。保存/导出/页面/选择/编辑结束/AI handoff 完成会话，isBusy 阻止旁路 autosave；serialize(false) 的草稿克隆恢复进入前裁切表示，不修改现场。替换先解码再记录；失败保留原图；Fit/Cover 重置实际取景。
 
 安全转换验证当前布局，无法保证未来外部选择器/媒体查询变化仍改变已移到外框的职责；这不是全 CSS 兼容层。实际普通 Grid/Flex item、百分比/auto/inline/absolute、padding/边框、链接、复制和撤销有行为覆盖；复杂不可保持的当前布局明确拒绝。
+
+生成契约补充：独立可移动图片的可见裁切应由自身 `object-fit`/`object-position`/圆角或已有 `data-crop-frame` 承担。未标记祖先的 `overflow:hidden/clip`、`clip-path` 或 `mask` 会留在原地截断被拖动的图片；普通布局包装层不要充当第二层蒙版。该问题属于生成结构，现有布局 QA 不一定报告编辑障碍。
 
 ## AI 修改审阅
 
