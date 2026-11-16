@@ -29,7 +29,7 @@ import {
 
   const MEDIA = 'img,video,canvas,svg,iframe,picture,[data-crop-frame]';
   const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
-  const SKIP_ATTR = /^(contenteditable|data-editor-current|data-editor-drop-target|data-editor-drag-source)$/; // 编辑器临时属性：不进撤销、不触发缩略图刷新
+  const SKIP_ATTR = /^(contenteditable|data-editor-current|data-editor-drop-target|data-editor-drag-source|data-thumb-measure-target)$/; // 编辑器临时属性：不进撤销、不触发缩略图刷新
 
   function main() {
     const root = document.documentElement;
@@ -77,6 +77,8 @@ import {
         html[data-editor-playing],html[data-editor-playing] body{background:#151515!important}
         html[data-editor-on] body > :not([data-stage]):not(script):not(style){display:none!important}
         html[data-editor-single] [data-artboard]:not([data-editor-current]){display:none!important}
+        html[data-thumb-measuring] [data-stage]{display:block!important}
+        html[data-thumb-measuring] [data-artboard]:not([data-thumb-measure-target]){display:none!important}
         html[data-editor-panning] [data-stage],html[data-editor-panning] [data-stage] *{cursor:grab!important}
       }
       @media print{html[data-editor-on],html[data-editor-on] body{padding:0!important;overflow:visible!important}[data-artboard]{break-after:page;break-inside:avoid}}
@@ -1652,8 +1654,8 @@ import {
       ),
     );
 
-    addEventListener('copy',e=>{if(!fromUI(e)&&!crop.active)transfer.copyEvent(e);},true);
-    addEventListener('paste',e=>{if(!fromUI(e)&&!crop.active)transfer.pasteEvent(e);},true);
+    addEventListener('copy',e=>{if(!crop.active)transfer.copyEvent(e);},true);
+    addEventListener('paste',e=>{if(!crop.active)transfer.pasteEvent(e);},true);
     addEventListener(
       "paste",
       (e) => {

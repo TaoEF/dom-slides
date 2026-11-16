@@ -31,6 +31,26 @@ const order = (p) =>
     .evaluateAll((nodes) => nodes.map((n) => n.dataset.artboard));
 const near = (a, b, t = 0.05) =>
   assert.ok(Math.abs(a - b) < t, `${a} differs from ${b}`);
+
+test('thumbnail measures each page alone when the stage uses a horizontal Flex row', async () => {
+  for (const [width, flex] of [[1440, false], [700, false], [700, true]]) {
+    const p = await browser.newPage({ viewport: { width, height: 900 } });
+    try {
+      let html = fixture.replace('flex-direction:column', 'flex-direction:row');
+      if (flex) html = html.replace('[data-artboard]{', '[data-artboard]{flex:1 1 0;');
+      await p.setContent(html);
+      await p.addScriptTag({ content: editor });
+      for (let i = 0; i < 3; i++) {
+        const frame = p.locator('.thumb iframe').nth(i).contentFrame();
+        await frame.locator('[data-thumb-target]').waitFor();
+        assert.equal(await frame.locator('[data-thumb-target]').evaluate(n => n.offsetWidth), 800);
+      }
+      assert.equal(await p.locator('[data-artboard=p1]').evaluate(n => n.offsetWidth), 800);
+      assert.equal(await p.locator('[data-thumb-measure-target]').count(), 0);
+      assert.equal(await p.locator('html').getAttribute('data-thumb-measuring'), null);
+    } finally { await p.close(); }
+  }
+});
 async function current(p) {
   return p.locator("[data-editor-current]").getAttribute("data-artboard");
 }

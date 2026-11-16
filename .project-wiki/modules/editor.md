@@ -17,6 +17,10 @@ sources:
     status: current
   - path: html-design/src/selection.js
     status: current
+  - path: html-design/src/workspace-transfer.js
+    status: current
+  - path: html-design/clipboard.test.mjs
+    status: current
   - path: html-design/src/groups.js
     status: current
   - path: html-design/groups.test.mjs
@@ -141,6 +145,8 @@ crop.js 负责有限 cover/pan/resize 数学和裁切会话。有效操作才将
 
 侧栏宽度变化时，画布视口必须读取同一 CSS 宽度变量，不能保留另一套断点常量。自动适应与后续缩放采用相同的三位小数精度，避免内容更新时重算缩放产生亚像素位移。
 
+缩略图测量隐藏页面时必须保持单页布局；横向 Flex 舞台若同时显示所有页面，会把固定宽度画板压窄，缓存后的 iframe 只显示左侧窄条，其余呈灰块。临时测量标记不进入保存与缩略图刷新观察。
+
 文字自然高度测量必须解除副本的 aspect-ratio / contain / container-type 尺寸约束，并结合真实节点 scrollHeight/clientHeight 验证，避免误报适配成功；坐标和视觉缩放不一致；复制后 ID 引用重复；把 owner 状态当作 editing；跨容器图层或临时 UI 污染保存。
 
 
@@ -172,6 +178,12 @@ Ctrl/⌘ G、Shift G与菜单共用组合/取消动作及写权限守卫；Ctrl/
 Issue36在预览页面菜单增加画布尺寸，页级CSS border-box px，保留box-sizing。预设和自定义只作用当前页；已有响应式内容自然布局，不整体缩放。通过页面管理租约和单步历史保存原style（含缺失）；冲突CSS回滚。尺寸输入草稿阻止外部接管，确认走同一输入保护；复制显式保留源尺寸。artboard-size.js供UI与Runtime复用。Chrome CSSOM设置后removeAttribute可能留下空style，回滚先显式设置原字符串再移除缺失状态。
 
 唯一审查修复：复制尺寸必须用setProperty保留原inline !important；只显示当前页时，复制页的尺寸校验必须在withAll中测量。
+## Object clipboard
+
+普通编辑模式的对象剪贴板复用 workspace-transfer 的 DOM 捕获与几何落点验证，但系统剪贴板保存版本化的实际对象数据，不依赖来源标签页内存 token。Ctrl/⌘ C 需要选中画布对象，Ctrl/⌘ V 在有编辑权限时粘贴到当前页；文字输入和文件图片粘贴仍用原入口。跨页/跨标签页重建 data-el 与 DOM ID，资源 URL 基于来源文档转为绝对路径。对象依赖未选中的外层蒙版或 picture 来源时复制前拒绝；目标 CSS 或子树几何不等价时粘贴整体拒绝，不留下部分插入。每次粘贴是一条撤销记录。工作区拖放仍是 opt-in。
+
+真实文件切页时，焦点会留在 Shadow DOM 的缩略图按钮上。对象剪贴板不能用 `fromUI` 一概跳过这些键盘事件；只在输入框、可编辑文字、裁切或无编辑权限时让出快捷键。回归测试必须先点击缩略图再粘贴，并覆盖跨标签页目标页切换。
+
 ## Editable workspace prototype (#37, opt-in branch)
 
 用户反馈将#37原型重点改为编辑与跨画布复用，保留原缩略图导航。独立workspace-view.js只用editor style投影自动排布，不写frame坐标；viewport统一zoom/pan/fit，原Editor/Edit/Done/thumbnail/page/history/persistence保留。data-workspace-prototype仅为独立样例opt-in；非opt-in文件维持原行为，不代表main已发布。
