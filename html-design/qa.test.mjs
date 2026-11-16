@@ -20,7 +20,7 @@ body{margin:0}[data-artboard]{width:800px;height:600px;position:relative}p{font:
 const qa = html => measureDocumentText({ mode: 'qa', html });
 const codes = r => r.issues.map(i => i.code);
 test('painted divs without data-el are located; layout-only wrappers are not reported', async () => {
-  const result = await qa(wrap('<div class="layout"><div class="card"><span data-el="child">Object</span></div><div class="plain"><span data-el="other">Other</span></div></div>', '.layout{display:grid;grid-template-columns:200px 200px;gap:10px}.card{height:80px;background:#eee;border:1px solid #aaa}.plain{height:80px;display:flex;padding:10px}'));
+  const result = await qa(wrap('<div class="layout"><div class="card"><span data-el="child">Object</span></div><div class="plain"><span data-el="other">Other</span></div></div>', '.layout{display:grid;grid-template-columns:200px 200px;gap:10px}.card{height:80px;background:#eee;border:1px solid #aaa}.plain{height:80px;display:flex;padding:10px;box-shadow:0 0 0 0 rgba(0,0,0,0)}'));
   const unmarked = result.issues.filter(i => i.code === 'VISUAL_CONTAINER_UNMARKED');
   assert.equal(unmarked.length, 1, JSON.stringify(result));
   assert.equal(unmarked[0].pageId, 'p1');

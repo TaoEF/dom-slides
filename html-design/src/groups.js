@@ -51,16 +51,19 @@ const style = (node, pseudo, ignoredStyles) => {
 };
 // Check the live page synchronously before a structural change is committed.
 // This catches direct-child/nth-child/ancestor selectors, line wraps and paint order.
-export function layoutProbe(board, ignored = [], ignoredStyles = new Set()) {
+export function layoutProbe(board, ignored = [], ignoredStyles = new Set(), { text = true, paintOrder = true } = {}) {
   const nodes = [board, ...board.querySelectorAll('*')].filter(n => !ignored.includes(n));
   const facts = nodes.map(node => ({node, boxes:boxes(node), style:style(node,null,ignoredStyles), pseudo:['::before','::after'].map(p => style(node,p,ignoredStyles))}));
-  const walker = document.createTreeWalker(board, NodeFilter.SHOW_TEXT), texts = [];
-  while (walker.nextNode()) {
-    if (!walker.currentNode.textContent.trim() || walker.currentNode.parentElement.closest('style,script')) continue;
-    const range = document.createRange(); range.selectNodeContents(walker.currentNode);
-    texts.push({node:walker.currentNode, boxes:boxes(range)});
+  const texts = [];
+  if (text) {
+    const walker = document.createTreeWalker(board, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      if (!walker.currentNode.textContent.trim() || walker.currentNode.parentElement.closest('style,script')) continue;
+      const range = document.createRange(); range.selectNodeContents(walker.currentNode);
+      texts.push({node:walker.currentNode, boxes:boxes(range)});
+    }
   }
-  const points = facts.flatMap(({boxes}) => boxes.flatMap(([x,y,w,h]) => w && h ? [[x+w/2,y+h/2],[x+.5,y+.5],[x+w-.5,y+h-.5]] : []));
+  const points = paintOrder ? facts.flatMap(({boxes}) => boxes.flatMap(([x,y,w,h]) => w && h ? [[x+w/2,y+h/2],[x+.5,y+.5],[x+w-.5,y+h-.5]] : [])) : [];
   const paint = ([x,y]) => document.elementsFromPoint(x,y).filter(n => nodes.includes(n));
   const layers = points.map(paint);
   const sameBoxes = (a,b) => a.length === b.length && a.every((r,i) => r.every((v,j) => Math.abs(v-b[i][j]) < .05));

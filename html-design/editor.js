@@ -389,17 +389,20 @@ property of their respective owners.
     const cs = getComputedStyle(node, pseudo);
     return [...cs].filter((name) => !ignoredStyles.has(name)).map((name) => cs.getPropertyValue(name));
   };
-  function layoutProbe(board, ignored = [], ignoredStyles = /* @__PURE__ */ new Set()) {
+  function layoutProbe(board, ignored = [], ignoredStyles = /* @__PURE__ */ new Set(), { text = true, paintOrder = true } = {}) {
     const nodes = [board, ...board.querySelectorAll("*")].filter((n) => !ignored.includes(n));
     const facts = nodes.map((node) => ({ node, boxes: boxes(node), style: style(node, null, ignoredStyles), pseudo: ["::before", "::after"].map((p) => style(node, p, ignoredStyles)) }));
-    const walker = document.createTreeWalker(board, NodeFilter.SHOW_TEXT), texts = [];
-    while (walker.nextNode()) {
-      if (!walker.currentNode.textContent.trim() || walker.currentNode.parentElement.closest("style,script")) continue;
-      const range = document.createRange();
-      range.selectNodeContents(walker.currentNode);
-      texts.push({ node: walker.currentNode, boxes: boxes(range) });
+    const texts = [];
+    if (text) {
+      const walker = document.createTreeWalker(board, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (!walker.currentNode.textContent.trim() || walker.currentNode.parentElement.closest("style,script")) continue;
+        const range = document.createRange();
+        range.selectNodeContents(walker.currentNode);
+        texts.push({ node: walker.currentNode, boxes: boxes(range) });
+      }
     }
-    const points = facts.flatMap(({ boxes: boxes2 }) => boxes2.flatMap(([x, y, w, h]) => w && h ? [[x + w / 2, y + h / 2], [x + 0.5, y + 0.5], [x + w - 0.5, y + h - 0.5]] : []));
+    const points = paintOrder ? facts.flatMap(({ boxes: boxes2 }) => boxes2.flatMap(([x, y, w, h]) => w && h ? [[x + w / 2, y + h / 2], [x + 0.5, y + 0.5], [x + w - 0.5, y + h - 0.5]] : [])) : [];
     const paint = ([x, y]) => document.elementsFromPoint(x, y).filter((n) => nodes.includes(n));
     const layers = points.map(paint);
     const sameBoxes = (a, b) => a.length === b.length && a.every((r, i) => r.every((v, j) => Math.abs(v - b[i][j]) < 0.05));
@@ -1132,11 +1135,16 @@ property of their respective owners.
     if (/\/\s*0(?:\.0+)?%?\s*\)$/.test(value)) return false;
     return true;
   };
+  var shadowVisible = (value) => {
+    if (value === "none") return false;
+    const colors = value.match(/(?:rgba?|hsla?|color)\([^)]*\)|transparent/gi);
+    return !colors || colors.some(colorVisible);
+  };
   function paintedDiv(el) {
     if (el?.tagName !== "DIV" || !el.getClientRects().length) return false;
     const s = getComputedStyle(el), r = el.getBoundingClientRect();
     if (s.display === "none" || s.display === "contents" || s.visibility !== "visible" || s.opacity === "0" || r.width <= 0 || r.height <= 0) return false;
-    if (colorVisible(s.backgroundColor) || s.backgroundImage !== "none" || s.boxShadow !== "none") return true;
+    if (colorVisible(s.backgroundColor) || s.backgroundImage !== "none" || shadowVisible(s.boxShadow)) return true;
     if (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0 && colorVisible(s.outlineColor)) return true;
     return ["Top", "Right", "Bottom", "Left"].some((side) => !["none", "hidden"].includes(s[`border${side}Style`]) && parseFloat(s[`border${side}Width`]) > 0 && colorVisible(s[`border${side}Color`]));
   }
@@ -9593,6 +9601,20 @@ property of their respective owners.
         stage.dataset.elementSeq = n;
         return id;
       }
+      function markerAffectsAuthorCSS() {
+        const marker = /data-el|data-element-seq/i, seen = /* @__PURE__ */ new Set();
+        const depends = (sheet) => {
+          if (!sheet || seen.has(sheet)) return false;
+          seen.add(sheet);
+          try {
+            return [...sheet.cssRules].some((rule) => marker.test(rule.cssText) || rule.styleSheet && depends(rule.styleSheet));
+          } catch {
+            return true;
+          }
+        };
+        if ([...document.styleSheets, ...document.adoptedStyleSheets || []].some((sheet) => !sheet.ownerNode?.matches?.("[data-editor-style]") && depends(sheet))) return true;
+        return [...stage.querySelectorAll("[style]")].some((el) => marker.test(el.getAttribute("style")));
+      }
       function markPaintedContainer(target, board) {
         if (!board || !persistence?.canEdit()) return null;
         let candidate = null;
@@ -9604,7 +9626,11 @@ property of their respective owners.
           }
         }
         if (!candidate) return null;
-        const unchanged = layoutProbe(board, [], /* @__PURE__ */ new Set(["cursor"]));
+        const rect = candidate.getBoundingClientRect();
+        const unchanged = markerAffectsAuthorCSS() ? layoutProbe(board, [], /* @__PURE__ */ new Set(["cursor"]), { text: false, paintOrder: false }) : () => {
+          const next = candidate.getBoundingClientRect();
+          return ["x", "y", "width", "height"].every((axis) => Math.abs(next[axis] - rect[axis]) < 0.05);
+        };
         const before = snap([candidate]);
         const oldSeq = stage.getAttribute("data-element-seq");
         candidate.dataset.el = elementId(board, "container");

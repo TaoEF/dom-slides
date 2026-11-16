@@ -1095,6 +1095,20 @@ import {
       stage.dataset.elementSeq = n;
       return id;
     }
+    function markerAffectsAuthorCSS() {
+      const marker = /data-el|data-element-seq/i, seen = new Set();
+      const depends = (sheet) => {
+        if (!sheet || seen.has(sheet)) return false;
+        seen.add(sheet);
+        try {
+          return [...sheet.cssRules].some(rule =>
+            marker.test(rule.cssText) || (rule.styleSheet && depends(rule.styleSheet)));
+        } catch { return true; } // Unknown external CSS uses the safe full probe.
+      };
+      if ([...document.styleSheets, ...(document.adoptedStyleSheets || [])]
+        .some(sheet => !sheet.ownerNode?.matches?.('[data-editor-style]') && depends(sheet))) return true;
+      return [...stage.querySelectorAll('[style]')].some(el => marker.test(el.getAttribute('style')));
+    }
     function markPaintedContainer(target, board) {
       if (!board || !persistence?.canEdit()) return null;
       let candidate = null;
@@ -1103,7 +1117,15 @@ import {
         if (paintedDiv(n)) { candidate = n; break; }
       }
       if (!candidate) return null;
-      const unchanged = layoutProbe(board, [], new Set(['cursor']));
+      // Without author CSS depending on the new attribute, only the editor's
+      // cursor rule can change. Keep the common click path cheap.
+      const rect = candidate.getBoundingClientRect();
+      const unchanged = markerAffectsAuthorCSS()
+        ? layoutProbe(board, [], new Set(['cursor']), { text: false, paintOrder: false })
+        : () => {
+          const next = candidate.getBoundingClientRect();
+          return ['x', 'y', 'width', 'height'].every(axis => Math.abs(next[axis] - rect[axis]) < .05);
+        };
       const before = snap([candidate]);
       const oldSeq = stage.getAttribute('data-element-seq');
       candidate.dataset.el = elementId(board, 'container');
