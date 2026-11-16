@@ -1137,8 +1137,23 @@ property of their respective owners.
   };
   var shadowVisible = (value) => {
     if (value === "none") return false;
-    const colors = value.match(/(?:rgba?|hsla?|color)\([^)]*\)|transparent/gi);
-    return !colors || colors.some(colorVisible);
+    const layers = [];
+    let start = 0, depth = 0;
+    for (let i = 0; i < value.length; i++) {
+      if (value[i] === "(") depth++;
+      else if (value[i] === ")") depth--;
+      else if (value[i] === "," && !depth) {
+        layers.push(value.slice(start, i));
+        start = i + 1;
+      }
+    }
+    layers.push(value.slice(start));
+    return layers.some((layer) => {
+      const colors = layer.match(/(?:rgba?|hsla?|color)\([^)]*\)|transparent/gi);
+      if (colors && !colors.some(colorVisible)) return false;
+      const lengths = [...layer.replace(/(?:rgba?|hsla?|color)\([^)]*\)/gi, "").matchAll(/(-?(?:\d+\.?\d*|\.\d+))px/g)].map((match) => Number(match[1]));
+      return lengths.length < 2 || lengths.some((length) => Math.abs(length) > 1e-3);
+    });
   };
   function paintedDiv(el) {
     if (el?.tagName !== "DIV" || !el.getClientRects().length) return false;

@@ -32,6 +32,9 @@ test('clicking a painted card marks and selects it; layout-only div stays unmark
   try {
     await p.locator('#plain').click({ position: { x: 10, y: 10 } });
     assert.equal(await p.locator('#plain').getAttribute('data-el'), null);
+    await p.locator('#plain').evaluate(el => { el.style.boxShadow = '0 0 0 0 #000'; });
+    await p.locator('#plain').click({ position: { x: 10, y: 10 } });
+    assert.equal(await p.locator('#plain').getAttribute('data-el'), null);
     await p.locator('[data-el=inner]').click();
     assert.equal(await p.locator('#card').getAttribute('data-el'), null);
     const before = await p.locator('#card').boundingBox();
