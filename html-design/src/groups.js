@@ -45,15 +45,15 @@ export function stableGroupMarkup(board) {
   return template.content.childNodes.length === 1 && template.content.firstChild.isEqualNode(board);
 }
 const boxes = node => [...node.getClientRects()].map(r => [r.x,r.y,r.width,r.height]);
-const style = (node, pseudo) => {
+const style = (node, pseudo, ignoredStyles) => {
   const cs = getComputedStyle(node, pseudo);
-  return [...cs].map(name => cs.getPropertyValue(name));
+  return [...cs].filter(name => !ignoredStyles.has(name)).map(name => cs.getPropertyValue(name));
 };
 // Check the live page synchronously before a structural change is committed.
 // This catches direct-child/nth-child/ancestor selectors, line wraps and paint order.
-export function layoutProbe(board, ignored = []) {
+export function layoutProbe(board, ignored = [], ignoredStyles = new Set()) {
   const nodes = [board, ...board.querySelectorAll('*')].filter(n => !ignored.includes(n));
-  const facts = nodes.map(node => ({node, boxes:boxes(node), style:style(node), pseudo:['::before','::after'].map(p => style(node,p))}));
+  const facts = nodes.map(node => ({node, boxes:boxes(node), style:style(node,null,ignoredStyles), pseudo:['::before','::after'].map(p => style(node,p,ignoredStyles))}));
   const walker = document.createTreeWalker(board, NodeFilter.SHOW_TEXT), texts = [];
   while (walker.nextNode()) {
     if (!walker.currentNode.textContent.trim() || walker.currentNode.parentElement.closest('style,script')) continue;
@@ -64,7 +64,7 @@ export function layoutProbe(board, ignored = []) {
   const paint = ([x,y]) => document.elementsFromPoint(x,y).filter(n => nodes.includes(n));
   const layers = points.map(paint);
   const sameBoxes = (a,b) => a.length === b.length && a.every((r,i) => r.every((v,j) => Math.abs(v-b[i][j]) < .05));
-  return () => facts.every(f => f.node.isConnected && sameBoxes(f.boxes,boxes(f.node)) && JSON.stringify(f.style)===JSON.stringify(style(f.node)) && JSON.stringify(f.pseudo)===JSON.stringify(['::before','::after'].map(p => style(f.node,p)))) &&
+  return () => facts.every(f => f.node.isConnected && sameBoxes(f.boxes,boxes(f.node)) && JSON.stringify(f.style)===JSON.stringify(style(f.node,null,ignoredStyles)) && JSON.stringify(f.pseudo)===JSON.stringify(['::before','::after'].map(p => style(f.node,p,ignoredStyles)))) &&
     texts.every(t => { const range=document.createRange(); range.selectNodeContents(t.node); return sameBoxes(t.boxes,boxes(range)); }) && points.every((p,i) => { const now = paint(p); return now.length === layers[i].length && now.every((n,j) => n === layers[i][j]); });
 }
 

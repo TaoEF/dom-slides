@@ -4621,13 +4621,29 @@ property of their respective owners.
     return !facts.complete;
   }
 
+  // html-design/src/painted-container.js
+  var colorVisible = (value) => {
+    if (!value || value === "transparent") return false;
+    if (/^rgba\(/i.test(value) && /,\s*0(?:\.0+)?\s*\)$/.test(value)) return false;
+    if (/\/\s*0(?:\.0+)?%?\s*\)$/.test(value)) return false;
+    return true;
+  };
+  function paintedDiv(el) {
+    if (el?.tagName !== "DIV" || !el.getClientRects().length) return false;
+    const s = getComputedStyle(el), r = el.getBoundingClientRect();
+    if (s.display === "none" || s.display === "contents" || s.visibility !== "visible" || s.opacity === "0" || r.width <= 0 || r.height <= 0) return false;
+    if (colorVisible(s.backgroundColor) || s.backgroundImage !== "none" || s.boxShadow !== "none") return true;
+    if (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0 && colorVisible(s.outlineColor)) return true;
+    return ["Top", "Right", "Bottom", "Left"].some((side) => !["none", "hidden"].includes(s[`border${side}Style`]) && parseFloat(s[`border${side}Width`]) > 0 && colorVisible(s[`border${side}Color`]));
+  }
+
   // html-design/src/qa.js
   var LIMITS = { elements: 2e3, texts: 500, graphemes: 1e5, perText: 2e4, issues: 500 };
   var round2 = (v) => Math.round(v * 1e3) / 1e3;
   var START = /^[、。，．！？：；）〕］｝〉》」』】〗〙〛’”％‰…]/u;
   var END = /[（〔［｛〈《「『【〖〘〚‘“]$/u;
   var CJK_ORPHAN = /^\p{Script=Han}[、。，．！？：；）〕］｝〉》」』】’”…]*$/u;
-  var SUPPRESSIBLE = /* @__PURE__ */ new Set(["TEXT_OVERFLOW", "ANCESTOR_CLIP", "ELEMENT_OUT_OF_BOUNDS", "LINE_ORPHAN_CJK", "LINE_ORPHAN_PUNCTUATION", "LINE_START_PROHIBITED", "LINE_END_PROHIBITED"]);
+  var SUPPRESSIBLE = /* @__PURE__ */ new Set(["TEXT_OVERFLOW", "ANCESTOR_CLIP", "ELEMENT_OUT_OF_BOUNDS", "LINE_ORPHAN_CJK", "LINE_ORPHAN_PUNCTUATION", "LINE_START_PROHIBITED", "LINE_END_PROHIBITED", "VISUAL_CONTAINER_UNMARKED"]);
   var box = (r, b) => ({ x: round2(r.left - b.left), y: round2(r.top - b.top), width: round2(r.width), height: round2(r.height) });
   var visible = (el, board) => {
     if (getComputedStyle(el).visibility !== "visible" || !el.getClientRects().length) return false;
@@ -4722,6 +4738,7 @@ property of their respective owners.
     const idCounts = /* @__PURE__ */ new Map(), nodeById = /* @__PURE__ */ new Map();
     const coverage = {
       elements: { seen: 0, checked: 0, hidden: 0, unsupported: 0, limit: LIMITS.elements },
+      containers: { seen: 0, unmarked: 0, limit: LIMITS.elements },
       text: { seen: candidates.length, checked: textResult.checkedCount, linesChecked: 0, unsupported: 0, hidden: 0, unmarked: 0, limit: LIMITS.texts, perTextCodeUnitLimit: 2e4 },
       graphemes: { checked: 0, limit: LIMITS.graphemes, perTextLimit: LIMITS.perText },
       suppressed: 0,
@@ -4754,6 +4771,18 @@ property of their respective owners.
       if (!usableQaId(board.dataset.artboard) || pageIds.filter((v) => v === board.dataset.artboard).length !== 1) {
         incomplete = true;
         emit("ID_INVALID", board, null, { kind: "page", length: board.dataset.artboard?.length ?? 0 }, "error");
+      }
+      for (const el of board.querySelectorAll("div:not([data-el])")) {
+        if (++coverage.containers.seen > LIMITS.elements) {
+          truncated = incomplete = true;
+          break;
+        }
+        if (!visible(el, board) || !paintedDiv(el)) continue;
+        coverage.containers.unmarked++;
+        const path = [];
+        for (let n = el; n && n !== board && path.length < 32; n = n.parentElement)
+          path.unshift([...n.parentElement.children].indexOf(n));
+        emit("VISUAL_CONTAINER_UNMARKED", board, el, { path, box: box(el.getBoundingClientRect(), board.getBoundingClientRect()) });
       }
       for (const el of board.querySelectorAll("[data-el],img")) {
         if (++coverage.elements.seen > LIMITS.elements) {

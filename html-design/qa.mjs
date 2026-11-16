@@ -7,7 +7,7 @@ import { QA_OUTPUT } from './src/qa-result.js';
 
 const help = `Read-only layout and text-contrast QA for a saved HTML snapshot. Prints one bounded JSON result.
 Usage: node html-design/qa.mjs check <file.html> [--base-url <loopback-url>]
-Checks text overflow/clipping, element bounds, image decoding, reliable rendered Chinese line breaks and WCAG AA text contrast (local axe-core).
+Checks text overflow/clipping, element bounds, image decoding, unmarked painted containers, reliable rendered Chinese line breaks and WCAG AA text contrast (local axe-core).
 Relative resources use a temporary read-only server rooted at the input directory.
 --base-url uses an existing loopback file URL, including original resources for an AI work copy.
 Reads saved bytes only; no document scripts, writes, editor takeover or automatic fixes.

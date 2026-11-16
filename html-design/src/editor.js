@@ -1,4 +1,5 @@
 import { createWorkspaceTransfer } from "./workspace-transfer.js";
+import { paintedDiv } from "./painted-container.js";
 import { portableHTML } from "./portable-html.js";
 import { selectionFrame, frameCorner, resizeCursor, sameSelection, rotationGroups, groupLocalAngle, writeGroupAngle } from './oriented-selection.js';
 import { isGroup, groupRoots, objectRect, logicalTarget, groupProblem, groupStructureProblem, stableGroupMarkup, layoutProbe } from "./groups.js";
@@ -1094,6 +1095,33 @@ import {
       stage.dataset.elementSeq = n;
       return id;
     }
+    function markPaintedContainer(target, board) {
+      if (!board || !persistence?.canEdit()) return null;
+      let candidate = null;
+      for (let n = target; n && n !== board; n = n.parentElement) {
+        if (n.hasAttribute?.('data-el')) break;
+        if (paintedDiv(n)) { candidate = n; break; }
+      }
+      if (!candidate) return null;
+      const unchanged = layoutProbe(board, [], new Set(['cursor']));
+      const before = snap([candidate]);
+      const oldSeq = stage.getAttribute('data-element-seq');
+      candidate.dataset.el = elementId(board, 'container');
+      if (!unchanged()) {
+        apply(before);
+        if (oldSeq == null) stage.removeAttribute('data-element-seq');
+        else stage.setAttribute('data-element-seq', oldSeq);
+        toast('这个容器的样式依赖编辑标记，已保留原样');
+        return null;
+      }
+      const after = snap([candidate]);
+      push({
+        undo: () => { apply(before); if (S.selection.includes(candidate)) select(null); },
+        redo: () => apply(after),
+        board,
+      });
+      return candidate;
+    }
     function addText() {
       const b = activeBoard();
       if (!b || !visible(b) || !persistence?.canEdit()) return;
@@ -1656,7 +1684,7 @@ import {
         e.preventDefault();
         ui.activeElement?.blur();
         endText();
-        const raw = e.target.closest("[data-el]");
+        const raw = markPaintedContainer(e.target, clickedBoard || S.current) || e.target.closest("[data-el]");
         if (S.group && raw && !S.group.contains(raw)) S.group = null;
         const el = logicalTarget(raw, S.group);
         if (!el) {

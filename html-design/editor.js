@@ -385,13 +385,13 @@ property of their respective owners.
     return template.content.childNodes.length === 1 && template.content.firstChild.isEqualNode(board);
   }
   var boxes = (node) => [...node.getClientRects()].map((r) => [r.x, r.y, r.width, r.height]);
-  var style = (node, pseudo) => {
+  var style = (node, pseudo, ignoredStyles) => {
     const cs = getComputedStyle(node, pseudo);
-    return [...cs].map((name) => cs.getPropertyValue(name));
+    return [...cs].filter((name) => !ignoredStyles.has(name)).map((name) => cs.getPropertyValue(name));
   };
-  function layoutProbe(board, ignored = []) {
+  function layoutProbe(board, ignored = [], ignoredStyles = /* @__PURE__ */ new Set()) {
     const nodes = [board, ...board.querySelectorAll("*")].filter((n) => !ignored.includes(n));
-    const facts = nodes.map((node) => ({ node, boxes: boxes(node), style: style(node), pseudo: ["::before", "::after"].map((p) => style(node, p)) }));
+    const facts = nodes.map((node) => ({ node, boxes: boxes(node), style: style(node, null, ignoredStyles), pseudo: ["::before", "::after"].map((p) => style(node, p, ignoredStyles)) }));
     const walker = document.createTreeWalker(board, NodeFilter.SHOW_TEXT), texts = [];
     while (walker.nextNode()) {
       if (!walker.currentNode.textContent.trim() || walker.currentNode.parentElement.closest("style,script")) continue;
@@ -403,7 +403,7 @@ property of their respective owners.
     const paint = ([x, y]) => document.elementsFromPoint(x, y).filter((n) => nodes.includes(n));
     const layers = points.map(paint);
     const sameBoxes = (a, b) => a.length === b.length && a.every((r, i) => r.every((v, j) => Math.abs(v - b[i][j]) < 0.05));
-    return () => facts.every((f) => f.node.isConnected && sameBoxes(f.boxes, boxes(f.node)) && JSON.stringify(f.style) === JSON.stringify(style(f.node)) && JSON.stringify(f.pseudo) === JSON.stringify(["::before", "::after"].map((p) => style(f.node, p)))) && texts.every((t) => {
+    return () => facts.every((f) => f.node.isConnected && sameBoxes(f.boxes, boxes(f.node)) && JSON.stringify(f.style) === JSON.stringify(style(f.node, null, ignoredStyles)) && JSON.stringify(f.pseudo) === JSON.stringify(["::before", "::after"].map((p) => style(f.node, p, ignoredStyles)))) && texts.every((t) => {
       const range = document.createRange();
       range.selectNodeContents(t.node);
       return sameBoxes(t.boxes, boxes(range));
@@ -1123,6 +1123,22 @@ property of their respective owners.
       return true;
     }
     return { enabled, begin, move, drop, clear, copyEvent, pasteEvent };
+  }
+
+  // html-design/src/painted-container.js
+  var colorVisible = (value) => {
+    if (!value || value === "transparent") return false;
+    if (/^rgba\(/i.test(value) && /,\s*0(?:\.0+)?\s*\)$/.test(value)) return false;
+    if (/\/\s*0(?:\.0+)?%?\s*\)$/.test(value)) return false;
+    return true;
+  };
+  function paintedDiv(el) {
+    if (el?.tagName !== "DIV" || !el.getClientRects().length) return false;
+    const s = getComputedStyle(el), r = el.getBoundingClientRect();
+    if (s.display === "none" || s.display === "contents" || s.visibility !== "visible" || s.opacity === "0" || r.width <= 0 || r.height <= 0) return false;
+    if (colorVisible(s.backgroundColor) || s.backgroundImage !== "none" || s.boxShadow !== "none") return true;
+    if (s.outlineStyle !== "none" && parseFloat(s.outlineWidth) > 0 && colorVisible(s.outlineColor)) return true;
+    return ["Top", "Right", "Bottom", "Left"].some((side) => !["none", "hidden"].includes(s[`border${side}Style`]) && parseFloat(s[`border${side}Width`]) > 0 && colorVisible(s[`border${side}Color`]));
   }
 
   // html-design/src/portable-html.js
@@ -9577,6 +9593,39 @@ property of their respective owners.
         stage.dataset.elementSeq = n;
         return id;
       }
+      function markPaintedContainer(target, board) {
+        if (!board || !persistence?.canEdit()) return null;
+        let candidate = null;
+        for (let n = target; n && n !== board; n = n.parentElement) {
+          if (n.hasAttribute?.("data-el")) break;
+          if (paintedDiv(n)) {
+            candidate = n;
+            break;
+          }
+        }
+        if (!candidate) return null;
+        const unchanged = layoutProbe(board, [], /* @__PURE__ */ new Set(["cursor"]));
+        const before = snap([candidate]);
+        const oldSeq = stage.getAttribute("data-element-seq");
+        candidate.dataset.el = elementId(board, "container");
+        if (!unchanged()) {
+          apply(before);
+          if (oldSeq == null) stage.removeAttribute("data-element-seq");
+          else stage.setAttribute("data-element-seq", oldSeq);
+          toast("这个容器的样式依赖编辑标记，已保留原样");
+          return null;
+        }
+        const after = snap([candidate]);
+        push({
+          undo: () => {
+            apply(before);
+            if (S.selection.includes(candidate)) select(null);
+          },
+          redo: () => apply(after),
+          board
+        });
+        return candidate;
+      }
       function addText() {
         const b = activeBoard();
         if (!b || !visible(b) || !persistence?.canEdit()) return;
@@ -10125,7 +10174,7 @@ property of their respective owners.
           e.preventDefault();
           ui.activeElement?.blur();
           endText();
-          const raw = e.target.closest("[data-el]");
+          const raw = markPaintedContainer(e.target, clickedBoard || S.current) || e.target.closest("[data-el]");
           if (S.group && raw && !S.group.contains(raw)) S.group = null;
           const el = logicalTarget(raw, S.group);
           if (!el) {

@@ -19,6 +19,16 @@ body{margin:0}[data-artboard]{width:800px;height:600px;position:relative}p{font:
 </style>${extra}</head><body><main data-stage><section data-artboard="p1">${body}</section></main></body></html>`;
 const qa = html => measureDocumentText({ mode: 'qa', html });
 const codes = r => r.issues.map(i => i.code);
+test('painted divs without data-el are located; layout-only wrappers are not reported', async () => {
+  const result = await qa(wrap('<div class="layout"><div class="card"><span data-el="child">Object</span></div><div class="plain"><span data-el="other">Other</span></div></div>', '.layout{display:grid;grid-template-columns:200px 200px;gap:10px}.card{height:80px;background:#eee;border:1px solid #aaa}.plain{height:80px;display:flex;padding:10px}'));
+  const unmarked = result.issues.filter(i => i.code === 'VISUAL_CONTAINER_UNMARKED');
+  assert.equal(unmarked.length, 1, JSON.stringify(result));
+  assert.equal(unmarked[0].pageId, 'p1');
+  assert.deepEqual(unmarked[0].evidence.path, [0, 0]);
+  assert.equal(result.coverage.containers.unmarked, 1);
+  const ignored = await qa(wrap('<div class="card" data-qa-ignore="VISUAL_CONTAINER_UNMARKED"><span data-el="child">Object</span></div>', '.card{background:#eee;width:200px;height:80px}'));
+  assert.ok(!codes(ignored).includes('VISUAL_CONTAINER_UNMARKED'));
+});
 function command(args, env = {}, onStart) {
   const child = spawn(process.execPath, ['html-design/qa.mjs', ...args], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
   let out = '', err = '';
