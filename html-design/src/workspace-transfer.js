@@ -4,6 +4,9 @@ import { selectionRoots, unionRect } from "./selection.js";
 import { selectionFrame, writeGroupAngle } from "./oriented-selection.js";
 import { rekeyDOMIds } from "./identifiers.js";
 
+const CLIPBOARD_TYPE = "application/x-dom-slides-objects+json";
+const CLIPBOARD_LIMIT = 4 * 1024 * 1024;
+
 // Transient clipboard/gesture snapshots, never a second document model.
 export function createWorkspaceTransfer({
   S,
@@ -20,38 +23,107 @@ export function createWorkspaceTransfer({
   toast,
 }) {
   const enabled = stage.hasAttribute("data-workspace-prototype");
-  let clipboard = null,
-    ghost = null;
+  let ghost = null;
   const all = (roots) => [
     ...new Set(roots.flatMap((n) => [n, ...n.querySelectorAll("*")])),
   ];
   const ignored =
     /^(cursor|user-select|-webkit-user-select|caret-color|pointer-events|animation.*|transition.*)$/;
-  function capture(roots) {
+  const clipsOverflow = value => ['hidden', 'clip', 'scroll', 'auto'].includes(value);
+  function paintBounds(node) {
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    const visit = current => {
+      const style = getComputedStyle(current);
+      if (!current.getClientRects().length || style.display === 'none' || style.visibility === 'hidden') return;
+      const rect = current.getBoundingClientRect();
+      left = Math.min(left, rect.left); top = Math.min(top, rect.top);
+      right = Math.max(right, rect.right); bottom = Math.max(bottom, rect.bottom);
+      if (clipsOverflow(style.overflowX) && clipsOverflow(style.overflowY)) return;
+      for (const child of current.children) visit(child);
+    };
+    visit(node);
+    return { left, top, right, bottom };
+  }
+  function clipAffects(node, ancestor, style = getComputedStyle(ancestor)) {
+    if (style.clipPath !== 'none' || style.maskImage !== 'none') return true;
+    if (!clipsOverflow(style.overflowX) && !clipsOverflow(style.overflowY)) return false;
+    const r = paintBounds(node), outer = ancestor.getBoundingClientRect(),
+      left = outer.left + (parseFloat(style.borderLeftWidth) || 0),
+      top = outer.top + (parseFloat(style.borderTopWidth) || 0),
+      right = outer.right - (parseFloat(style.borderRightWidth) || 0),
+      bottom = outer.bottom - (parseFloat(style.borderBottomWidth) || 0),
+      radius = side => {
+        const value = style[`border${side}Radius`], n = parseFloat(value) || 0;
+        return value.includes('%') ? n * Math.min(right - left, bottom - top) / 100 : n;
+      },
+      tl = radius('TopLeft'), tr = radius('TopRight'),
+      br = radius('BottomRight'), bl = radius('BottomLeft');
+    if (clipsOverflow(style.overflowX) && (r.left < left - .5 || r.right > right + .5)) return true;
+    if (clipsOverflow(style.overflowY) && (r.top < top - .5 || r.bottom > bottom + .5)) return true;
+    if (tl && r.left < left + tl && r.top < top + tl) return true;
+    if (tr && r.right > right - tr && r.top < top + tr) return true;
+    if (br && r.right > right - br && r.bottom > bottom - br) return true;
+    if (bl && r.left < left + bl && r.bottom > bottom - bl) return true;
+    return false;
+  }
+  function singleImageMask(image, parent) {
+    if (!image.matches('img[data-el]') || !parent || parent.matches('[data-el],picture,[data-artboard]') ||
+      parent.children.length !== 1 || parent.firstElementChild !== image || parent.textContent.trim()) return false;
+    const style = getComputedStyle(parent);
+    return clipsOverflow(style.overflowX) && clipsOverflow(style.overflowY) &&
+      style.clipPath === 'none' && style.maskImage === 'none' && style.filter === 'none' &&
+      style.boxShadow === 'none' && style.opacity === '1' &&
+      ['Top','Right','Bottom','Left'].every(side =>
+        !parseFloat(style[`border${side}Width`]) && !parseFloat(style[`padding${side}`])) &&
+      ['::before','::after'].every(pseudo => ['none','normal'].includes(getComputedStyle(parent, pseudo).content));
+  }
+  function sameBox(a, b) {
+    const x = a.getBoundingClientRect(), y = b.getBoundingClientRect();
+    return ['left', 'top', 'right', 'bottom'].every(key => Math.abs(x[key] - y[key]) < .5);
+  }
+  function capture(roots, { clipboard = false } = {}) {
     roots = selectionRoots(roots);
     if (!roots.length) throw new Error("请先选择元素");
     if (all(roots).length > 500)
       throw new Error("原型暂支持一次复用最多 500 个节点");
-    const bounds = unionRect(roots),
-      zoom = S.zoom;
-    const objects = roots.map((source) => {
+    const zoom = S.zoom;
+    const objects = roots.map((selected) => {
+      const parent = selected.parentElement;
+      const imageMask = clipboard && singleImageMask(selected, parent) && clipAffects(selected, parent);
+      const flatImageMask = imageMask && sameBox(selected, parent);
+      const framedImageMask = imageMask && !flatImageMask;
+      const source = framedImageMask ? parent : selected;
+      for (let ancestor = source.parentElement; ancestor && !ancestor.matches('[data-artboard]'); ancestor = ancestor.parentElement) {
+        if (ancestor.matches('picture'))
+          throw new Error('图片依赖 picture 来源，暂不能单独跨页复制');
+        if (flatImageMask && ancestor === parent) continue;
+        if (clipAffects(source, ancestor))
+          throw new Error('对象受外层蒙版裁切，暂不能单独跨页复制');
+      }
       const template = source.cloneNode(true),
         originals = [source, ...source.querySelectorAll("*")],
         copies = [template, ...template.querySelectorAll("*")],
         pairs = new Map(originals.map((n, i) => [n, copies[i]]));
       const ids = new Set(originals.map((n) => n.id).filter(Boolean));
       for (const node of originals) {
-        if (node.matches("script,iframe,object,embed,video,canvas"))
+        if (node.matches("script,style,link,iframe,object,embed,video,canvas,form"))
           throw new Error("这种内容暂不支持跨画布复用");
         for (const pseudo of ["::before", "::after"])
-          if (
-            !["none", "normal", '""'].includes(
-              getComputedStyle(node, pseudo).content,
-            )
-          )
+          if (!["none", "normal"].includes(getComputedStyle(node, pseudo).content))
             throw new Error("含生成内容的对象暂不支持跨画布复用");
         const target = pairs.get(node),
           cs = getComputedStyle(node);
+        if (node.hasAttribute('srcset')) throw new Error('含 srcset 的对象暂不支持跨页复制');
+        for (const attr of ['src', 'href', 'poster', 'xlink:href']) {
+          const value = node.getAttribute(attr);
+          if (!value || value.startsWith('#')) continue;
+          const url = new URL(value, node.baseURI);
+          if (url.protocol === 'blob:' || url.protocol === 'javascript:')
+            throw new Error('这种资源暂不支持跨页复制');
+          if (attr === 'xlink:href' && node.hasAttributeNS('http://www.w3.org/1999/xlink', 'href'))
+            target.setAttributeNS('http://www.w3.org/1999/xlink', attr, url.href);
+          else target.setAttribute(attr, url.href);
+        }
         target.removeAttribute("contenteditable");
         target.removeAttribute("data-bbox");
         target.removeAttribute("data-flow-style");
@@ -68,6 +140,15 @@ export function createWorkspaceTransfer({
             node.style.getPropertyPriority(key),
           );
         }
+      }
+      if (flatImageMask)
+        template.style.setProperty('border-radius', getComputedStyle(parent).borderRadius);
+      if (framedImageMask) {
+        template.dataset.el = selected.dataset.el;
+        template.dataset.cropFrame = '1';
+        const image = pairs.get(selected);
+        image.removeAttribute('data-el');
+        image.dataset.cropImage = '';
       }
       const leaves = groupRoots([source]).map((node) => {
         const g = elementGeometry(node);
@@ -89,6 +170,7 @@ export function createWorkspaceTransfer({
       });
       return { source, template, pairs, leaves, frames };
     });
+    const bounds = unionRect(objects.map(object => object.source));
     return {
       objects,
       zoom,
@@ -214,6 +296,7 @@ export function createWorkspaceTransfer({
         "object-fit",
         "object-position",
         "box-shadow",
+        "border-radius",
       ];
       for (let i = 0; i < result.length; i++) {
         const templates = [
@@ -228,7 +311,7 @@ export function createWorkspaceTransfer({
             // Absolute placement blockifies inline roots; their internal layout
             // still has to pass the rendered-geometry checks below.
             const blockified = key === "display" && actual === "block" &&
-              wanted === "inline" && packet.objects[i].leaves.some(l => l.copy === templates[j]);
+              ["inline", "inline-block"].includes(wanted) && packet.objects[i].leaves.some(l => l.copy === templates[j]);
             if (wanted && actual !== wanted && !blockified)
               throw new Error("目标画布的 CSS 改变了对象样式，本次已保留原样");
           }
@@ -389,43 +472,104 @@ export function createWorkspaceTransfer({
     });
   }
   function copyEvent(event) {
-    if (!enabled || !canEdit() || !S.selection.length || S.text) return false;
+    if (!canEdit() || !S.selection.length || S.text || editableTarget(event)) return false;
     try {
-      const packet = capture(S.selection),
-        token = crypto.getRandomValues(new Uint32Array(4)).join("-");
-      clipboard = { packet, token };
-      event.clipboardData.setData("application/x-dom-slides-objects", token);
+      const packet = capture(S.selection, { clipboard: true });
+      const data = JSON.stringify({
+        app: 'dom-slides', version: 1, origin: location.origin,
+        zoom: packet.zoom, cx: packet.cx, cy: packet.cy,
+        objects: packet.objects.map(object => {
+          const nodes = [object.template, ...object.template.querySelectorAll('*')];
+          return {
+            html: object.template.outerHTML,
+            frames: object.frames,
+            leaves: object.leaves.map(leaf => ({ index: nodes.indexOf(leaf.copy), g: leaf.g })),
+          };
+        }),
+      });
+      if (data.length > CLIPBOARD_LIMIT) throw new Error('复制内容过大，请减少选中元素');
+      event.clipboardData.setData(CLIPBOARD_TYPE, data);
       event.clipboardData.setData(
         "text/plain",
         S.selection.map((n) => n.textContent).join("\n"),
       );
       event.preventDefault();
       event.stopImmediatePropagation();
-      toast("已复制元素 · 可粘贴到其他画布");
+      toast("已复制元素 · 可粘贴到其他页面或标签页");
       return true;
     } catch (error) {
+      // A failed second copy must replace the previous object packet too.
+      event.clipboardData?.setData(CLIPBOARD_TYPE, JSON.stringify({
+        app: 'dom-slides', version: 1, origin: location.origin, failed: true,
+      }));
+      event.clipboardData?.setData('text/plain', '');
+      event.preventDefault();
+      event.stopImmediatePropagation();
       toast(error.message, 4500);
       return false;
     }
   }
+  const editableTarget = event => event.composedPath().some(node =>
+    node instanceof Element && node.matches('input,textarea,select,[contenteditable]:not([contenteditable=false])'));
+  function readPacket(data) {
+    if (!data || data.length > CLIPBOARD_LIMIT) throw new Error('剪贴板内容无效或过大');
+    const wire = JSON.parse(data);
+    if (wire.app === 'dom-slides' && wire.version === 1 && wire.origin === location.origin && wire.failed)
+      throw new Error('上次复制未成功，请重新选择对象');
+    if (wire.app !== 'dom-slides' || wire.version !== 1 || wire.origin !== location.origin ||
+      !Number.isFinite(wire.zoom) || wire.zoom <= 0 || !Number.isFinite(wire.cx) || !Number.isFinite(wire.cy) ||
+      !Array.isArray(wire.objects) || !wire.objects.length || wire.objects.length > 100)
+      throw new Error('剪贴板对象格式不受支持');
+    let count = 0;
+    const objects = wire.objects.map(object => {
+      if (typeof object.html !== 'string' || object.html.length > CLIPBOARD_LIMIT ||
+        !Array.isArray(object.frames) || !Array.isArray(object.leaves))
+        throw new Error('剪贴板对象格式不受支持');
+      const template = document.createElement('template');
+      template.innerHTML = object.html;
+      if (template.content.children.length !== 1 || template.content.childNodes.length !== 1)
+        throw new Error('剪贴板对象结构无效');
+      const root = template.content.firstElementChild;
+      if (!root.hasAttribute('data-el') || root.hasAttribute('data-artboard'))
+        throw new Error('剪贴板对象结构无效');
+      const nodes = [root, ...root.querySelectorAll('*')];
+      count += nodes.length;
+      if (count > 500 || object.frames.length !== nodes.length ||
+        nodes.some(node => {
+          if (node.matches('script,style,link,iframe,object,embed,video,canvas,form')) return true;
+          return [...node.attributes].some(attr => /^on/i.test(attr.name) || attr.name === 'srcdoc' ||
+            /^(href|src|poster)$/i.test(attr.name) && /^\s*javascript:/i.test(attr.value));
+        })) throw new Error('剪贴板对象含不支持的内容');
+      const frames = object.frames.map(frame => {
+        if (!frame || !['cx','cy','w','h'].every(key => Number.isFinite(frame[key]) && Math.abs(frame[key]) < 1e7))
+          throw new Error('剪贴板对象位置无效');
+        return frame;
+      });
+      const leaves = object.leaves.map(leaf => {
+        if (!Number.isInteger(leaf.index) || leaf.index < 0 || leaf.index >= nodes.length ||
+          !leaf.g || !['w','h','cx','cy','scale','angle'].every(key => Number.isFinite(leaf.g[key]) && Math.abs(leaf.g[key]) < 1e7) ||
+          leaf.g.w <= 0 || leaf.g.h <= 0 || leaf.g.scale <= 0)
+          throw new Error('剪贴板对象几何无效');
+        return { copy: nodes[leaf.index], g: leaf.g };
+      });
+      if (!leaves.length) throw new Error('剪贴板对象没有可放置的元素');
+      return { template: root, frames, leaves };
+    });
+    return { objects, zoom: wire.zoom, cx: wire.cx, cy: wire.cy };
+  }
   function pasteEvent(event) {
-    if (
-      !enabled ||
-      !canEdit() ||
-      S.text ||
-      !clipboard ||
-      event.clipboardData?.getData("application/x-dom-slides-objects") !==
-        clipboard.token
-    )
-      return false;
+    if (!canEdit() || S.text || editableTarget(event)) return false;
+    const data = event.clipboardData?.getData(CLIPBOARD_TYPE);
+    if (!data) return false;
     event.preventDefault();
     event.stopImmediatePropagation();
     const board = S.current;
     if (!board) return true;
     let inserted = [];
     try {
+      const packet = readPacket(data);
       const r = board.getBoundingClientRect();
-      inserted = install(clipboard.packet, board, {
+      inserted = install(packet, board, {
         copy: true,
         center: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
       });

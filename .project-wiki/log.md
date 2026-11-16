@@ -35,3 +35,4 @@
 
 - 2026-11-09: #35 minimal saved-snapshot inspect/staged sparse edits and #36 independent artboard sizing; bounds and deferred provenance/MCP remain explicit. #37 independent readonly prototype only.
 - 2026-11-09: #37 user feedback shifts prototype validation from view switching to editable same-DOM workspace, cross-artboard movement/reuse, and unchanged original thumbnail navigation; isolated opt-in iteration, not main release.
+- 2026-11-15: #40 manual mode converts every visible editable object on the current page out of Flex/Grid while preserving DOM nesting. It freezes necessary wrapper boxes, restores authored styles on return to flow, and rejects geometry that cannot be preserved. #41 records general element clipboard support as the next independent version.

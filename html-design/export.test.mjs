@@ -171,6 +171,27 @@ async function slideXml(html) {
   return { xml: await zip.file('ppt/slides/slide1.xml').async('string'), zip };
 }
 
+test('PPTX skips shapes fully outside a clipped scene and keeps an intrinsic badge on one line', async () => {
+  const html = `<!doctype html><html><head><style>
+    [data-artboard]{position:relative;width:600px;height:300px;background:#181b25}
+    .scene{position:absolute;left:40px;top:60px;width:180px;height:130px;overflow:hidden;border-radius:20px}
+    .axis{position:absolute;left:250px;top:30px;width:100px;height:35px;overflow-x:clip;overflow-y:visible}
+    .badge{display:inline-block;margin:80px 0 0 280px;padding:11px 17px;border-radius:40px;background:#9fe1cf;font:700 13px Arial}
+    </style></head><body><main data-stage><section data-artboard="p1">
+    <div class="scene"><svg data-el="hidden-circle" data-shape="ellipse" data-shape-fill="#f56d55" data-shape-stroke="#f56d55" data-shape-width="0" style="position:absolute;left:210px;top:-30px;width:50px;height:50px" viewBox="0 0 50 50"><circle cx="25" cy="25" r="25" fill="#f56d55"/></svg><svg data-el="visible-circle" data-shape="ellipse" data-shape-fill="#f56d55" data-shape-stroke="#f56d55" data-shape-width="0" style="position:absolute;left:20px;top:20px;width:50px;height:50px" viewBox="0 0 50 50"><circle cx="25" cy="25" r="25" fill="#f56d55"/></svg></div>
+    <div class="axis"><span data-el="below-axis" style="position:absolute;left:10px;top:55px;display:block;width:80px;height:20px">Visible</span></div>
+    <span data-el="pill" class="badge">Fully editable</span>
+    </section></main></body></html>`;
+  const { xml } = await slideXml(html);
+  assert.doesNotMatch(xml, /name="hidden-circle"/);
+  assert.match(xml, /name="visible-circle"/);
+  assert.match(xml, /name="below-axis"/);
+  const badge = shapesOf(xml).find(shape => shape.includes('name="pill"') && shape.includes('<p:txBody>'));
+  assert.ok(badge, 'badge text stays editable');
+  assert.match(badge, /<a:bodyPr[^>]*wrap="none"/);
+  assert.match(badge, /<a:normAutofit/);
+});
+
 test('PPTX uniform rounded cards use one native fill/stroke shape each, with editable reflowing children', async () => {
   const html = `<!doctype html><html><head><style>
     [data-artboard]{width:960px;height:540px;position:relative}

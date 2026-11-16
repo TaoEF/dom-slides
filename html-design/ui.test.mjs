@@ -1,6 +1,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdtemp, rm, mkdir } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { chromium } from "playwright";
 import JSZip from "jszip";
 import { exportDocument, browserOptions } from "./export.mjs";
@@ -31,6 +33,62 @@ const order = (p) =>
     .evaluateAll((nodes) => nodes.map((n) => n.dataset.artboard));
 const near = (a, b, t = 0.05) =>
   assert.ok(Math.abs(a - b) < t, `${a} differs from ${b}`);
+
+test('thumbnail measures each page alone when the stage uses a horizontal Flex row', async () => {
+  for (const [width, flex] of [[1440, false], [700, false], [700, true]]) {
+    const p = await browser.newPage({ viewport: { width, height: 900 } });
+    try {
+      let html = fixture.replace('flex-direction:column', 'flex-direction:row');
+      if (flex) html = html.replace('[data-artboard]{', '[data-artboard]{flex:1 1 0;');
+      await p.setContent(html);
+      await p.addScriptTag({ content: editor });
+      for (let i = 0; i < 3; i++) {
+        const frame = p.locator('.thumb iframe').nth(i).contentFrame();
+        await frame.locator('[data-thumb-target]').waitFor();
+        assert.equal(await frame.locator('[data-thumb-target]').evaluate(n => n.offsetWidth), 800);
+      }
+      assert.equal(await p.locator('[data-artboard=p1]').evaluate(n => n.offsetWidth), 800);
+      assert.equal(await p.locator('[data-thumb-measure-target]').count(), 0);
+      assert.equal(await p.locator('html').getAttribute('data-thumb-measuring'), null);
+    } finally { await p.close(); }
+  }
+});
+
+test('Download HTML embeds the editor, images and linked CSS for offline reopening', async () => {
+  const page = await browser.newPage({ acceptDownloads: true });
+  const folder = await mkdtemp(path.join(os.tmpdir(), 'dom-slides-portable-'));
+  try {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="red"/></svg>';
+    const html = `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/deck.css"></head><body><main data-stage><section data-artboard="p1" data-title="Portable" data-mode="flow"><h1 data-el="title">Offline slide</h1><img data-el="photo" src="/photo.svg" alt="photo"></section></main><script data-editor src="/editor.js"></script></body></html>`;
+    await page.route('http://portable.test/**', route => {
+      const pathname = new URL(route.request().url()).pathname;
+      if (pathname === '/deck.html') return route.fulfill({ contentType: 'text/html', body: html });
+      if (pathname === '/deck.css') return route.fulfill({ contentType: 'text/css', body: '[data-artboard]{position:relative;width:800px;height:450px;background-image:url("/texture.svg")}h1{font:40px Arial}' });
+      if (pathname === '/editor.js') return route.fulfill({ contentType: 'application/javascript', body: editor });
+      if (['/photo.svg','/texture.svg'].includes(pathname)) return route.fulfill({ contentType: 'image/svg+xml', body: svg });
+      return route.abort();
+    });
+    await page.goto('http://portable.test/deck.html');
+    await page.locator('[data-act=export]').click();
+    const pending = page.waitForEvent('download');
+    await page.locator('[data-act=download]').click();
+    const downloaded = await readFile(await (await pending).path(), 'utf8');
+    assert.doesNotMatch(downloaded, /<script[^>]+src=|<link[^>]+stylesheet|src="\/photo\.svg"|url\("\/texture\.svg"\)/);
+    const file = path.join(folder, 'portable.html');
+    await writeFile(file, downloaded);
+    const offline = await browser.newPage();
+    try {
+      const remote = [];
+      offline.on('request', request => { if (/^https?:/.test(request.url())) remote.push(request.url()); });
+      await offline.goto('file://' + file);
+      await offline.locator('[data-act=edit]').waitFor();
+      assert.equal(await offline.locator('[data-artboard]').evaluate(node => node.offsetWidth), 800);
+      assert.equal(await offline.locator('img[data-el=photo]').evaluate(node => node.complete && node.naturalWidth > 0 && node.src.startsWith('data:')), true);
+      assert.equal(await offline.locator('[data-act=edit]').isEnabled(), true);
+      assert.deepEqual(remote, []);
+    } finally { await offline.close(); }
+  } finally { await page.close(); await rm(folder, { recursive: true, force: true }); }
+});
 async function current(p) {
   return p.locator("[data-editor-current]").getAttribute("data-artboard");
 }
@@ -236,6 +294,159 @@ test("artboard conversion only touches the current page and preserves positioned
   } finally {
     await p.close();
   }
+});
+
+test("manual mode detaches nested editable SVGs and text from a Flex container", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      board.insertAdjacentHTML('beforeend', `<div data-el="workspace" style="display:flex;align-items:center;gap:24px;width:440px;height:140px;margin-top:12px">
+        <svg data-el="rect" viewBox="0 0 80 80" style="display:block;width:80px;height:80px"><rect width="80" height="80" fill="red"/></svg>
+        <svg data-el="arrow" viewBox="0 0 60 60" style="display:block;width:60px;height:60px"><path d="M0 20h35V0l25 30-25 30V40H0z" fill="blue"/></svg>
+        <span data-el="hint">Observe the stroke</span>
+      </div>`);
+    });
+    const ids = ['workspace', 'rect', 'arrow', 'hint'];
+    const box = async (id) => p.locator(`[data-el=${id}]`).boundingBox();
+    const before = await Promise.all(ids.map(box));
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'artboard');
+    for (let i = 0; i < ids.length; i++) {
+      const after = await box(ids[i]);
+      for (const axis of ['x', 'y', 'width', 'height']) near(after[axis], before[i][axis], 1.5);
+      assert.equal(await p.locator(`[data-el=${ids[i]}]`).evaluate((n) => n.style.position), 'absolute');
+    }
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    await p.locator('[data-act=redo]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'artboard');
+    await p.locator('[data-el=rect]').click();
+    await dragHandle(p, 'e', 70, 0);
+    assert.ok((await box('rect')).width > before[1].width + 30);
+    for (let i = 2; i < ids.length; i++) {
+      const after = await box(ids[i]);
+      for (const axis of ['x', 'y']) near(after[axis], before[i][axis], 1.5);
+    }
+    assert.match(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), /data-flow-style=/);
+    p.once('dialog', (dialog) => dialog.accept());
+    await p.locator('[data-act=flow]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    assert.equal(await p.locator('[data-el=arrow]').evaluate((n) => n.style.position), '');
+    assert.equal(await p.locator('[data-el=rect]').evaluate((n) => n.style.width), '80px');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode rejects CSS that prevents independent positioning without partial changes", async () => {
+  const p = await open();
+  try {
+    await p.evaluate(() => {
+      const style = document.createElement('style');
+      style.textContent = '[data-el="p1-title"]{position:static!important}';
+      document.head.append(style);
+    });
+    const beforeHTML = await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML);
+    const before = await p.locator('[data-el=p1-title]').boundingBox();
+    p.once('dialog', (dialog) => dialog.dismiss());
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    const after = await p.locator('[data-el=p1-title]').boundingBox();
+    for (const axis of ['x', 'y', 'width', 'height']) near(after[axis], before[axis], 0.05);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.querySelectorAll('[data-flow-style]').length), 0);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => [n, ...n.querySelectorAll('[data-el]')].every((el) => el.style.length === 0)), true);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), beforeHTML);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode detaches Grid objects inside an unmarked wrapper", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      board.insertAdjacentHTML('beforeend', `<div id="plain-grid" style="display:grid;grid-template-columns:100px 100px;gap:16px;width:216px;height:90px">
+        <div data-el="grid-a" style="background:red;height:80px">A</div>
+        <div data-el="grid-b" style="background:blue;height:80px">B</div>
+      </div>`);
+    });
+    const a = p.locator('[data-el=grid-a]'), b = p.locator('[data-el=grid-b]');
+    const beforeA = await a.boundingBox(), beforeB = await b.boundingBox();
+    const alerts = [];
+    p.on('dialog', (dialog) => { alerts.push(dialog.message()); dialog.dismiss(); });
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'artboard', alerts.join('; '));
+    for (const [node, before] of [[a, beforeA], [b, beforeB]]) {
+      const after = await node.boundingBox();
+      for (const axis of ['x', 'y', 'width', 'height']) near(after[axis], before[axis], 1.5);
+      assert.equal(await node.evaluate((n) => getComputedStyle(n).position), 'absolute');
+    }
+    await a.evaluate((n) => { n.style.width = '180px'; });
+    const afterB = await b.boundingBox();
+    for (const axis of ['x', 'y']) near(afterB[axis], beforeB[axis], 1.5);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode preserves an unmarked absolute decoration beside an editable object", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      board.insertAdjacentHTML('beforeend', `<div id="plain-wrap" style="margin-left:100px;width:220px;height:100px">
+        <div data-el="editable-blue" style="width:90px;height:70px;background:blue">Blue</div>
+        <div id="absolute-red" style="position:absolute;left:40px;top:35px;width:30px;height:30px;background:red"></div>
+      </div>`);
+    });
+    const before = await p.locator('#absolute-red').boundingBox();
+    const beforeHTML = await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML);
+    const alerts = [];
+    p.on('dialog', (dialog) => { alerts.push(dialog.message()); dialog.dismiss(); });
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow', alerts.join('; '));
+    const after = await p.locator('#absolute-red').boundingBox();
+    for (const axis of ['x', 'y', 'width', 'height']) near(after[axis], before[axis], 1.5);
+    assert.equal(await p.locator('#plain-wrap').evaluate((n) => getComputedStyle(n).position), 'static');
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), beforeHTML);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode preserves positioned pseudo decorations on a static wrapper", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      const style = document.createElement('style');
+      style.textContent = '#pseudo-wrap::before{content:"";position:absolute;left:20px;top:20px;width:30px;height:30px;background:red}';
+      document.head.append(style);
+      board.insertAdjacentHTML('beforeend', '<div id="pseudo-wrap"><span data-el="pseudo-child">Decorated</span></div>');
+    });
+    const beforeHTML = await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML);
+    const alerts = [];
+    p.on('dialog', (dialog) => { alerts.push(dialog.message()); dialog.dismiss(); });
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    assert.match(alerts.join('; '), /装饰元素/);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), beforeHTML);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test("manual mode rejects normal-flow pseudo decorations when a child leaves flow", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      const style = document.createElement('style');
+      style.textContent = '#flow-pseudo-wrap::after{content:"Decoration";display:block;background:red;height:24px}';
+      document.head.append(style);
+      board.insertAdjacentHTML('beforeend', '<div id="flow-pseudo-wrap" style="width:200px;height:100px"><span data-el="flow-pseudo-child" style="display:block;height:30px">Text</span></div>');
+    });
+    const beforeHTML = await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML);
+    const alerts = [];
+    p.on('dialog', (dialog) => { alerts.push(dialog.message()); dialog.dismiss(); });
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    assert.match(alerts.join(' '), /装饰元素/);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), beforeHTML);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
 });
 
 // This test is geometry/interaction verification; visual review is done separately in one batch.

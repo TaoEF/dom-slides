@@ -37,7 +37,11 @@ export function createPages({
     return listUI.clientWidth ? Math.max(80, listUI.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) : 146;
   };
   function sizeOf(b) {
-    return withAll(() => {
+    // Measure one board in the same layout as the single-page editor. Showing
+    // every Flex sibling at once can shrink fixed-width slides to a thin strip.
+    b.setAttribute('data-thumb-measure-target', '');
+    root.setAttribute('data-thumb-measuring', '');
+    try { return withAll(() => {
       if (visible(b)) {
         const v = {
           w: b.offsetWidth || 1280,
@@ -49,7 +53,10 @@ export function createPages({
         return v;
       }
       return sizes.get(b) || { ...lastSize, display: "block" };
-    });
+    }); } finally {
+      root.removeAttribute('data-thumb-measuring');
+      b.removeAttribute('data-thumb-measure-target');
+    }
   }
   const fixCSS = ({ w, h, display }) =>
     `html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:${w}px!important;height:${h}px!important;min-height:0!important}[data-thumb-chain]{display:block!important;position:static!important;transform:none!important;translate:none!important;scale:none!important;margin:0!important;padding:0!important;border:0!important;width:${w}px!important;height:${h}px!important;min-height:0!important;overflow:hidden!important}[data-thumb-target]{display:${display}!important;position:relative!important;inset:auto!important;margin:0!important;transform:none!important;translate:none!important;scale:none!important;opacity:1!important;visibility:visible!important;flex:none!important;width:${w}px!important;height:${h}px!important;box-sizing:border-box!important}*,*::before,*::after{animation:none!important;transition:none!important}`;
