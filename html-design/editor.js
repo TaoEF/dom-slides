@@ -8867,10 +8867,7 @@ property of their respective owners.
           return ancestors;
         }));
         const wrappers = [...b.querySelectorAll("*")].filter((el) => wrapperSet.has(el));
-        if (wrappers.some((el) => getComputedStyle(el).position === "static" && ["::before", "::after"].some((pseudo) => {
-          const style2 = getComputedStyle(el, pseudo);
-          return ["absolute", "fixed"].includes(style2.position) && !["none", "normal"].includes(style2.content);
-        }))) {
+        if (wrappers.some((el) => ["::before", "::after"].some((pseudo) => !["none", "normal"].includes(getComputedStyle(el, pseudo).content)))) {
           alert("这一页含有无法稳定定位的装饰元素，未切换到手动模式。");
           return false;
         }

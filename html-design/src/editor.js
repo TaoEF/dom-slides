@@ -432,14 +432,10 @@ import {
         return ancestors;
       }));
       const wrappers = [...b.querySelectorAll("*")].filter((el) => wrapperSet.has(el));
-      // A static wrapper can anchor positioned pseudo-elements after conversion;
-      // their painted bounds are not exposed as DOM rectangles for rollback checks.
-      if (wrappers.some((el) => getComputedStyle(el).position === "static" &&
-        ["::before", "::after"].some((pseudo) => {
-          const style = getComputedStyle(el, pseudo);
-          return ["absolute", "fixed"].includes(style.position) &&
-            !["none", "normal"].includes(style.content);
-        }))) {
+      // Pseudo-elements have no measurable DOM rectangle. Their paint can shift
+      // when the wrapper or an earlier child leaves normal flow.
+      if (wrappers.some((el) => ["::before", "::after"].some((pseudo) =>
+        !["none", "normal"].includes(getComputedStyle(el, pseudo).content)))) {
         alert("这一页含有无法稳定定位的装饰元素，未切换到手动模式。");
         return false;
       }

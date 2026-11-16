@@ -429,6 +429,26 @@ test("manual mode preserves positioned pseudo decorations on a static wrapper", 
   } finally { await p.close(); }
 });
 
+test("manual mode rejects normal-flow pseudo decorations when a child leaves flow", async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board) => {
+      const style = document.createElement('style');
+      style.textContent = '#flow-pseudo-wrap::after{content:"Decoration";display:block;background:red;height:24px}';
+      document.head.append(style);
+      board.insertAdjacentHTML('beforeend', '<div id="flow-pseudo-wrap" style="width:200px;height:100px"><span data-el="flow-pseudo-child" style="display:block;height:30px">Text</span></div>');
+    });
+    const beforeHTML = await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML);
+    const alerts = [];
+    p.on('dialog', (dialog) => { alerts.push(dialog.message()); dialog.dismiss(); });
+    await p.locator('[data-act=artboard]').click();
+    assert.equal(await p.locator('[data-artboard=p1]').getAttribute('data-mode'), 'flow');
+    assert.match(alerts.join(' '), /装饰元素/);
+    assert.equal(await p.locator('[data-artboard=p1]').evaluate((n) => n.outerHTML), beforeHTML);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 // This test is geometry/interaction verification; visual review is done separately in one batch.
 test("single page is centered in the available work area, footer owns navigation, and zoom never enters a saved file", async () => {
   const p = await open();
