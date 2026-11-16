@@ -1,4 +1,5 @@
 import { createWorkspaceTransfer } from "./workspace-transfer.js";
+import { paintedDiv } from "./painted-container.js";
 import { portableHTML } from "./portable-html.js";
 import { selectionFrame, frameCorner, resizeCursor, sameSelection, rotationGroups, groupLocalAngle, writeGroupAngle } from './oriented-selection.js';
 import { isGroup, groupRoots, objectRect, logicalTarget, groupProblem, groupStructureProblem, stableGroupMarkup, layoutProbe } from "./groups.js";
@@ -1094,6 +1095,55 @@ import {
       stage.dataset.elementSeq = n;
       return id;
     }
+    function markerAffectsAuthorCSS() {
+      const marker = /data-el|data-element-seq/i, seen = new Set();
+      const depends = (sheet) => {
+        if (!sheet || seen.has(sheet)) return false;
+        seen.add(sheet);
+        try {
+          return [...sheet.cssRules].some(rule =>
+            marker.test(rule.cssText) || (rule.styleSheet && depends(rule.styleSheet)));
+        } catch { return true; } // Unknown external CSS uses the safe full probe.
+      };
+      if ([...document.styleSheets, ...(document.adoptedStyleSheets || [])]
+        .some(sheet => !sheet.ownerNode?.matches?.('[data-editor-style]') && depends(sheet))) return true;
+      return [...stage.querySelectorAll('[style]')].some(el => marker.test(el.getAttribute('style')));
+    }
+    function markPaintedContainer(target, board) {
+      if (!board || !persistence?.canEdit()) return null;
+      let candidate = null;
+      for (let n = target; n && n !== board; n = n.parentElement) {
+        if (n.hasAttribute?.('data-el')) break;
+        if (paintedDiv(n)) { candidate = n; break; }
+      }
+      if (!candidate) return null;
+      // Without author CSS depending on the new attribute, only the editor's
+      // cursor rule can change. Keep the common click path cheap.
+      const rect = candidate.getBoundingClientRect();
+      const unchanged = markerAffectsAuthorCSS()
+        ? layoutProbe(board, [], new Set(['cursor']), { text: false, paintOrder: false })
+        : () => {
+          const next = candidate.getBoundingClientRect();
+          return ['x', 'y', 'width', 'height'].every(axis => Math.abs(next[axis] - rect[axis]) < .05);
+        };
+      const before = snap([candidate]);
+      const oldSeq = stage.getAttribute('data-element-seq');
+      candidate.dataset.el = elementId(board, 'container');
+      if (!unchanged()) {
+        apply(before);
+        if (oldSeq == null) stage.removeAttribute('data-element-seq');
+        else stage.setAttribute('data-element-seq', oldSeq);
+        toast('这个容器的样式依赖编辑标记，已保留原样');
+        return null;
+      }
+      const after = snap([candidate]);
+      push({
+        undo: () => { apply(before); if (S.selection.includes(candidate)) select(null); },
+        redo: () => apply(after),
+        board,
+      });
+      return candidate;
+    }
     function addText() {
       const b = activeBoard();
       if (!b || !visible(b) || !persistence?.canEdit()) return;
@@ -1656,7 +1706,7 @@ import {
         e.preventDefault();
         ui.activeElement?.blur();
         endText();
-        const raw = e.target.closest("[data-el]");
+        const raw = markPaintedContainer(e.target, clickedBoard || S.current) || e.target.closest("[data-el]");
         if (S.group && raw && !S.group.contains(raw)) S.group = null;
         const el = logicalTarget(raw, S.group);
         if (!el) {

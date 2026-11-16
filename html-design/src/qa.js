@@ -4,12 +4,13 @@ import { cropGeometry } from './crop-geometry.js';
 import { QA_OUTPUT, usableQaId, appendQaIssue } from './qa-result.js';
 import { elementGeometry } from './geometry.js';
 import { checkContrast } from './contrast.js';
+import { paintedDiv } from './painted-container.js';
 const LIMITS = { elements: 2000, texts: 500, graphemes: 100000, perText: 20000, issues: 500 };
 const round = v => Math.round(v * 1000) / 1000;
 const START = /^[、。，．！？：；）〕］｝〉》」』】〗〙〛’”％‰…]/u;
 const END = /[（〔［｛〈《「『【〖〘〚‘“]$/u;
 const CJK_ORPHAN = /^\p{Script=Han}[、。，．！？：；）〕］｝〉》」』】’”…]*$/u;
-const SUPPRESSIBLE = new Set(['TEXT_OVERFLOW', 'ANCESTOR_CLIP', 'ELEMENT_OUT_OF_BOUNDS', 'LINE_ORPHAN_CJK', 'LINE_ORPHAN_PUNCTUATION', 'LINE_START_PROHIBITED', 'LINE_END_PROHIBITED']);
+const SUPPRESSIBLE = new Set(['TEXT_OVERFLOW', 'ANCESTOR_CLIP', 'ELEMENT_OUT_OF_BOUNDS', 'LINE_ORPHAN_CJK', 'LINE_ORPHAN_PUNCTUATION', 'LINE_START_PROHIBITED', 'LINE_END_PROHIBITED', 'VISUAL_CONTAINER_UNMARKED']);
 const box = (r, b) => ({ x: round(r.left - b.left), y: round(r.top - b.top), width: round(r.width), height: round(r.height) });
 const visible = (el, board) => {
   if (getComputedStyle(el).visibility !== 'visible' || !el.getClientRects().length) return false;
@@ -90,6 +91,7 @@ export async function checkVisualDocument({ boards, candidates, textResult }) {
   const issues = [], elements = [], pageIds = boards.map(b => b.dataset.artboard);
   const idCounts = new Map(), nodeById = new Map();
   const coverage = { elements: { seen: 0, checked: 0, hidden: 0, unsupported: 0, limit: LIMITS.elements },
+    containers: { seen: 0, unmarked: 0, limit: LIMITS.elements },
     text: { seen: candidates.length, checked: textResult.checkedCount, linesChecked: 0, unsupported: 0, hidden: 0, unmarked: 0, limit: LIMITS.texts, perTextCodeUnitLimit: 20000 },
     graphemes: { checked: 0, limit: LIMITS.graphemes, perTextLimit: LIMITS.perText }, suppressed: 0, issuesOmitted: 0, issueBytes: 2, evidenceOmitted: 0 };
   const output = { issues, coverage, truncated: false };
@@ -110,6 +112,15 @@ export async function checkVisualDocument({ boards, candidates, textResult }) {
   }
   for (const board of boards) {
     if (!usableQaId(board.dataset.artboard) || pageIds.filter(v => v === board.dataset.artboard).length !== 1) { incomplete = true; emit('ID_INVALID', board, null, { kind: 'page', length: board.dataset.artboard?.length ?? 0 }, 'error'); }
+    for (const el of board.querySelectorAll('div:not([data-el])')) {
+      if (++coverage.containers.seen > LIMITS.elements) { truncated = incomplete = true; break; }
+      if (!visible(el, board) || !paintedDiv(el)) continue;
+      coverage.containers.unmarked++;
+      const path = [];
+      for (let n = el; n && n !== board && path.length < 32; n = n.parentElement)
+        path.unshift([...n.parentElement.children].indexOf(n));
+      emit('VISUAL_CONTAINER_UNMARKED', board, el, { path, box: box(el.getBoundingClientRect(), board.getBoundingClientRect()) });
+    }
     for (const el of board.querySelectorAll('[data-el],img')) {
       if (++coverage.elements.seen > LIMITS.elements) { truncated = incomplete = true; break; }
       elements.push({ board, el });

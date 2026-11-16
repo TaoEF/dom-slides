@@ -27,9 +27,11 @@ One JSON result on stdout contains `schemaVersion: 1`, `status: ok|issues`,
 including overflowing ones. `coverage.text.linesChecked` counts blocks whose
 actual rendered lines were reliable enough for punctuation/orphan checks.
 Coverage separately reports seen/checked elements, hidden/unsupported text and
-elements, scanned graphemes, suppressions, admitted issue bytes and omitted issues/evidence. Seen counts are
+elements, unmarked painted containers, scanned graphemes, suppressions, admitted issue bytes and omitted issues/evidence. Seen counts are
 lower bounds when truncated. Never interpret missing issues as a clean result
 without checking `status`, `truncated` and coverage.
+
+`VISUAL_CONTAINER_UNMARKED` reports a visible div that paints a background, border, outline or shadow but lacks `data-el`. Its `evidence.path` is the zero-based child-index path from the artboard, and `evidence.box` locates it in CSS pixels. Pure Grid/Flex wrappers without their own paint are excluded. An intentional decorative container may use `data-qa-ignore="VISUAL_CONTAINER_UNMARKED"`; the suppression is counted. Editor click-to-mark is a separate, undoable action and QA never writes the file.
 
 `coverage.contrast` is independent of text-layout support: `seen`, `checked` (passes plus known failures), `low`, `unverified`, `hidden`, `inapplicable`, `unmarked`, `suppressed`, `truncated`, `complete`, `limit`, and `engine`. Counts describe text items and inventoried native controls; non-text controls are counted inapplicable, and rich-text children can share one editable object ID. `complete` is false for unknown or truncated contrast coverage; hidden text and disabled native controls are counted separately. Unmarked/invalid identities still follow the existing non-clean QA semantics.
 
