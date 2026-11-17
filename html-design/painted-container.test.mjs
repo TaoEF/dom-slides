@@ -69,6 +69,43 @@ test('clicking a painted card marks and selects it; layout-only div stays unmark
   } finally { await p.close(); }
 });
 
+test('unmarked visible text gains an editable marker on click without marking its layout wrapper', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate(board => board.insertAdjacentHTML('beforeend',
+      '<div id="text-layout" style="position:absolute;left:540px;top:40px;width:230px"><p id="plain-text" style="color:#777">A visible note with <strong>emphasis</strong>.</p><div id="direct-text">Direct text</div></div>'));
+    const note = p.locator('#plain-text'), before = await note.boundingBox();
+    await note.locator('strong').click();
+    const id = await note.getAttribute('data-el');
+    assert.match(id, /^p1-text-\d+$/);
+    assert.equal(await note.getAttribute('data-text-box'), '');
+    assert.equal(await p.locator('#text-layout').getAttribute('data-el'), null);
+    assert.equal(await note.locator('strong').getAttribute('data-el'), null);
+    const after = await note.boundingBox();
+    for (const axis of ['x','y','width','height']) assert.ok(Math.abs(after[axis] - before[axis]) < .05);
+    await note.dblclick();
+    assert.equal(await note.getAttribute('contenteditable'), 'true');
+    await p.keyboard.press('Escape');
+    await p.locator('#direct-text').click();
+    assert.match(await p.locator('#direct-text').getAttribute('data-el'), /^p1-text-\d+$/);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('#direct-text').getAttribute('data-el'), null);
+    await p.locator('[data-act=redo]').click();
+    assert.match(await p.locator('#direct-text').getAttribute('data-el'), /^p1-text-\d+$/);
+  } finally { await p.close(); }
+});
+
+test('author CSS depending on an automatically marked text box rolls back the marker', async () => {
+  const p = await open('#plain-text[data-text-box]{font-size:40px!important}');
+  try {
+    await p.locator('[data-artboard=p1]').evaluate(board => board.insertAdjacentHTML('beforeend',
+      '<p id="plain-text" style="position:absolute;left:520px;top:35px;font-size:18px">Unmarked text</p>'));
+    const before = await p.locator('#plain-text').evaluate(node => node.outerHTML);
+    await p.locator('#plain-text').click();
+    assert.equal(await p.locator('#plain-text').evaluate(node => node.outerHTML), before);
+  } finally { await p.close(); }
+});
+
 test('a CSS rule that changes a newly marked card is rejected without partial changes', async () => {
   const p = await open('#card[data-el]{background:red;border-width:12px}');
   try {

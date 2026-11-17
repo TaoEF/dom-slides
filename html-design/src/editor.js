@@ -1105,7 +1105,7 @@ import {
       return id;
     }
     function markerAffectsAuthorCSS() {
-      const marker = /data-el|data-element-seq/i, seen = new Set();
+      const marker = /data-el|data-element-seq|data-text-box/i, seen = new Set();
       const depends = (sheet) => {
         if (!sheet || seen.has(sheet)) return false;
         seen.add(sheet);
@@ -1118,31 +1118,46 @@ import {
         .some(sheet => !sheet.ownerNode?.matches?.('[data-editor-style]') && depends(sheet))) return true;
       return [...stage.querySelectorAll('[style]')].some(el => marker.test(el.getAttribute('style')));
     }
-    function markPaintedContainer(target, board) {
+    function textObjectCandidate(node) {
+      if (!node?.matches?.('h1,h2,h3,h4,h5,h6,p,span,div,li,blockquote,figcaption,a,strong,em,small,label') ||
+          !node.textContent.trim() || node.querySelector('[data-el],img,svg,canvas,video,iframe')) return false;
+      if (node.tagName === 'DIV' && ![...node.childNodes].some(child =>
+        child.nodeType === Node.TEXT_NODE && child.textContent.trim())) return false;
+      const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+      return node.getClientRects().length > 0 && style.display !== 'none' && style.display !== 'contents' &&
+        style.visibility === 'visible' && style.opacity !== '0' && rect.width > 0 && rect.height > 0;
+    }
+    function markEditableObject(target, board) {
       if (!board || !persistence?.canEdit()) return null;
-      let candidate = null;
+      let candidate = null, inlineText = null, painted = null, text = false;
       for (let n = target; n && n !== board; n = n.parentElement) {
         if (n.hasAttribute?.('data-el')) break;
-        if (paintedDiv(n)) { candidate = n; break; }
+        if (textObjectCandidate(n)) {
+          if (getComputedStyle(n).display !== 'inline') { candidate = n; text = true; break; }
+          inlineText ||= n;
+        }
+        if (!painted && paintedDiv(n)) painted = n;
       }
+      if (!candidate) { candidate = inlineText || painted; text = !!inlineText; }
       if (!candidate) return null;
       // Without author CSS depending on the new attribute, only the editor's
       // cursor rule can change. Keep the common click path cheap.
       const rect = candidate.getBoundingClientRect();
       const unchanged = markerAffectsAuthorCSS()
-        ? layoutProbe(board, [], new Set(['cursor']), { text: false, paintOrder: false })
+        ? layoutProbe(board, [], new Set(['cursor']), { text, paintOrder: false })
         : () => {
           const next = candidate.getBoundingClientRect();
           return ['x', 'y', 'width', 'height'].every(axis => Math.abs(next[axis] - rect[axis]) < .05);
         };
       const before = snap([candidate]);
       const oldSeq = stage.getAttribute('data-element-seq');
-      candidate.dataset.el = elementId(board, 'container');
+      candidate.dataset.el = elementId(board, text ? 'text' : 'container');
+      if (text) candidate.dataset.textBox = '';
       if (!unchanged()) {
         apply(before);
         if (oldSeq == null) stage.removeAttribute('data-element-seq');
         else stage.setAttribute('data-element-seq', oldSeq);
-        toast('这个容器的样式依赖编辑标记，已保留原样');
+        toast('这个元素的样式依赖编辑标记，已保留原样');
         return null;
       }
       const after = snap([candidate]);
@@ -1764,7 +1779,7 @@ import {
         e.preventDefault();
         ui.activeElement?.blur();
         endText();
-        const raw = markPaintedContainer(e.target, clickedBoard || S.current) || e.target.closest("[data-el]");
+        const raw = markEditableObject(e.target, clickedBoard || S.current) || e.target.closest("[data-el]");
         if (S.group && raw && !S.group.contains(raw)) S.group = null;
         const el = logicalTarget(raw, S.group);
         if (!el) {
