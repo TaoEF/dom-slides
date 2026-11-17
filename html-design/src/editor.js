@@ -727,6 +727,7 @@ import {
         selBox.classList.toggle("typing", !!S.text);
         selBox.classList.toggle("multiple", S.selection.length > 1);
         selBox.classList.toggle("group", S.selection.length === 1 && isGroup(el));
+        selBox.classList.toggle("text-box", S.selection.length === 1 && isTextObject(el));
       }
       positionRotation();
       placeTbar();
@@ -859,13 +860,16 @@ import {
       if (Math.abs(change) > .0001) el.style.rotate = `${g.individual + change}deg`;
       keepCenter(el, p, { x: initial.cx, y: initial.cy });
     }
+    function isTextObject(el) {
+      return !!el && !el.matches(MEDIA) && !el.querySelector('[data-el],img,svg,canvas,video,iframe') && !!el.textContent.trim();
+    }
     function startResize(e, dir) {
       if (S.selection.length !== 1) return;
       if (isGroup(S.sel)) return startGroupResize(e, dir);
       endText();
       const el = S.sel, b = el.closest('[data-artboard]'), initial = elementGeometry(el);
       if (!initial.supported) return toast('这种变换暂不支持拖动、缩放或旋转');
-      const media = el.matches(MEDIA), text = !media && !el.querySelector('[data-el],img,svg,canvas,video,iframe') && !!el.textContent.trim();
+      const media = el.matches(MEDIA), text = isTextObject(el);
       const metrics = text && dir.length === 2 ? textMetrics(el) : null;
       const before = snap(metrics ? metrics.map(m => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches('svg[data-shape]'));
       const hp = media || el.style.height ? 'height' : 'minHeight';
@@ -1144,14 +1148,56 @@ import {
       });
       return candidate;
     }
-    function addText() {
+    const textStyleProps = ['font-family','font-size','font-weight','font-style','line-height','letter-spacing','color','text-align','text-transform'];
+    let textStyleChoices = [];
+    function availableTextStyles(board) {
+      const seen = new Set(), styles = [];
+      for (const node of board.querySelectorAll('[data-el]')) {
+        if (!isTextObject(node) || !visible(node)) continue;
+        const computed = getComputedStyle(node), size = parseFloat(computed.fontSize);
+        if (!Number.isFinite(size) || size < 6) continue;
+        const values = Object.fromEntries(textStyleProps.map(prop => [prop, computed.getPropertyValue(prop)]));
+        const key = JSON.stringify(values);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        styles.push({ label: node.textContent.trim().replace(/\s+/g, ' ').slice(0, 24), size, values });
+      }
+      styles.sort((a, b) => b.size - a.size);
+      if (styles.length) return styles.slice(0, 4);
+      const scale = Math.min(1.25, board.clientWidth / 1280);
+      const base = getComputedStyle(board);
+      return [['大标题',64,48,700,'1.1'],['小标题',36,30,600,'1.25'],['正文',22,20,400,'1.5']].map(([label,size,min,weight,line]) => ({
+        label, size: Math.max(min, Math.round(size * scale)), values: {
+          'font-family': base.fontFamily, 'font-size': `${Math.max(min, Math.round(size * scale))}px`,
+          'font-weight': String(weight), 'line-height': line, color: base.color,
+        },
+      }));
+    }
+    function showTextStyles(button) {
+      const board = activeBoard();
+      if (!board) return;
+      textStyleChoices = availableTextStyles(board);
+      const panel = $('[data-menu=text-styles]');
+      panel.replaceChildren(...textStyleChoices.map((style, index) => {
+        const item = document.createElement('button');
+        item.type = 'button'; item.dataset.act = 'text-style-insert'; item.dataset.styleIndex = index;
+        item.textContent = style.label;
+        item.style.fontFamily = style.values['font-family'];
+        item.style.fontSize = `${Math.min(27, Math.max(13, style.size / 2))}px`;
+        item.style.fontWeight = style.values['font-weight'];
+        return item;
+      }));
+      openMenu('text-styles', button);
+    }
+    function addText(style = null) {
       const b = activeBoard();
       if (!b || !visible(b) || !persistence?.canEdit()) return;
       endText();
       const el = document.createElement("div");
       el.setAttribute("data-el", elementId(b, "text"));
       el.textContent = "双击编辑文字";
-      placeNew(el, b, 320, 60);
+      if (style) for (const [prop, value] of Object.entries(style.values)) el.style.setProperty(prop, value);
+      placeNew(el, b, style ? Math.min(Math.max(320, Math.round(style.size * 9)), Math.round(b.clientWidth * .75)) : 320, 60);
       startText(el);
       const r = document.createRange(),
         s = getSelection();
@@ -1960,7 +2006,9 @@ import {
       stop: () => viewport.stop(),
       flow: () => setMode(activeBoard(), "flow"),
       artboard: () => setMode(activeBoard(), "artboard"),
-      "add-text": addText,
+      "add-text": () => addText(),
+      "text-styles": (btn) => showTextStyles(btn),
+      "text-style-insert": (btn) => addText(textStyleChoices[Number(btn.dataset.styleIndex)]),
       "add-image": () => {
         S.replace = null;
         fileIn.click();
@@ -2058,6 +2106,7 @@ import {
       "flow",
       "artboard",
       "add-text",
+      "text-style-insert",
       "add-image",
       "shape-insert",
       "shape-width-up",
@@ -2101,7 +2150,7 @@ import {
       const act = btn.dataset.act;
       if (!act) return;
       if (
-        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape"].includes(act)
+        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape", "text-styles"].includes(act)
       )
         closeMenus();
       runAction(act, btn);

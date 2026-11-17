@@ -680,8 +680,53 @@ test("compact navigation keeps the first thumbnail intact and text layout contro
       await p.locator('[data-el=p1-title]').click();
       await p.screenshot({ path: `.export-test/ui-refinement-${width}.png` });
     }
-    assert.equal(await p.locator('[data-act=add-text] svg').count(), 2);
+    assert.equal(await p.locator('[data-act=add-text]').textContent(), 'T');
+    assert.equal(await p.locator('[data-act=text-styles] svg').count(), 1);
     assert.equal(await p.locator('[data-act=add-image] svg').count(), 1);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('text selection has width handles and one scale corner; insert menu reuses page styles or three defaults', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-el=p1-title]').click();
+    const handles = await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h));
+    assert.deepEqual(handles, ['e', 'se', 'w']);
+    await p.locator('[data-el=p1-image]').click();
+    assert.equal(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').length), 8);
+    await p.locator('[data-act=text-styles]').click();
+    assert.deepEqual(await p.locator('[data-menu=text-styles] button').allTextContents(), ['Scalesmall text']);
+    await p.locator('[data-menu=text-styles] button').click();
+    const inserted = p.locator('[data-artboard=p1] [data-el^=p1-text-]');
+    assert.equal(await inserted.evaluate(node => getComputedStyle(node).fontSize), '64px');
+    await p.keyboard.type('New title');
+    assert.match(await inserted.textContent(), /New title/);
+    await p.keyboard.press('Escape');
+    await p.locator('[data-artboard=p2]').evaluate(board => board.querySelector('[data-el]').remove());
+    await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    await p.locator('[data-act=text-styles]').click();
+    assert.deepEqual(await p.locator('[data-menu=text-styles] button').allTextContents(), ['大标题','小标题','正文']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('text style menu keeps four largest distinct styles on the current page', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate(board => {
+      for (const [index, size] of [44,72,52,18,44].entries()) {
+        const node = document.createElement('p');
+        node.dataset.el = `extra-${index}`;
+        node.textContent = `Sample ${index}`;
+        node.style.cssText = `position:absolute;left:450px;top:${30 + index * 45}px;font-size:${size}px`;
+        board.append(node);
+      }
+    });
+    await p.locator('[data-act=text-styles]').click();
+    const items = p.locator('[data-menu=text-styles] button');
+    assert.equal(await items.count(), 4);
+    assert.deepEqual(await items.allTextContents(), ['Sample 1','Scalesmall text','Sample 2','Sample 0']);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>文字工具验收</title>
+<style>
+body{margin:0;background:#ececef;color:#25272b;font-family:Arial,"PingFang SC",sans-serif}
+[data-stage]{display:flex;gap:24px;padding:36px}
+[data-artboard]{box-sizing:border-box;position:relative;width:1200px;height:675px;padding:80px 92px;overflow:hidden;background:white}
+.title{font-size:64px;font-weight:700;line-height:1.1;margin:0 0 34px}
+.subtitle{font-size:36px;font-weight:600;line-height:1.25;margin:0 0 28px}
+.body{font-size:22px;line-height:1.5;color:#5d626b;max-width:810px;margin:0}
+.note{font-size:16px;line-height:1.5;color:#8a8e96;position:absolute;bottom:70px;margin:0}
+</style>
+</head>
+<body>
+<main data-stage>
+<section data-artboard="p1" data-mode="flow" data-title="现有样式与抓手">
+<h1 data-el="title" class="title">让文字继续自由编辑</h1>
+<h2 data-el="subtitle" class="subtitle">选择文本，检查三个抓手</h2>
+<p data-el="body" class="body">左右抓手只改变文本框宽度；右下角同时缩放文字。顶部 T 旁的下拉菜单应显示本页三种文字样式。</p>
+<p class="note">复制文字后双击副本，也应该能继续输入。</p>
+</section>
+<section data-artboard="p2" data-mode="flow" data-title="空页默认样式">
+<p class="note">本页没有可编辑文字样式。打开顶部 T 下拉，应看到大标题、小标题、正文三个默认选项。</p>
+</section>
+</main>
+<script data-editor src="../html-design/editor.js"></script>
+</body>
+</html>

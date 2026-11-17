@@ -418,9 +418,13 @@ button.primary:hover:not(:disabled) {
   background: currentColor;
   box-shadow: inset 0 0 0 1px #0002;
 }
-.add-text { gap: 0; width: 36px; }
-.add-text .icon:first-child { width: 12px; height: 12px; }
-.add-text .icon:last-child { width: 17px; height: 17px; }
+.add-text-control { display:flex; align-items:center; }
+.add-text { width:28px; min-width:28px; padding:0; }
+.text-insert-glyph { font:500 23px/1 Arial,sans-serif; }
+.text-styles-trigger { width:16px; min-width:16px; padding:0; }
+.text-styles-trigger .icon { width:11px; height:11px; }
+.text-style-palette { width:210px; }
+.text-style-palette button { display:block; width:100%; height:auto; min-height:42px; padding:8px 10px; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .add-shape { gap: 0; width: 36px; }
 .add-shape .icon:first-child { width: 17px; height: 17px; }
 .add-shape .icon:last-child { width: 10px; height: 10px; }
@@ -481,6 +485,7 @@ button.primary:hover:not(:disabled) {
   display: none;
 }
 .sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }
+.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="se"]) { display:none; }
 .sel.unsupported i { display:none; }
 .rotate-handle {
   position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;
