@@ -731,6 +731,48 @@ test('text style menu keeps four largest distinct styles on the current page', a
   } finally { await p.close(); }
 });
 
+test('an emptied text box keeps its three handles and font scaling', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-act=add-text]').click();
+    const text = p.locator('[data-artboard=p1] [data-text-box]');
+    await p.keyboard.press('ControlOrMeta+A');
+    await p.keyboard.press('Backspace');
+    assert.equal(await text.textContent(), '');
+    await p.keyboard.press('Escape');
+    assert.equal(await text.getAttribute('data-text-box'), '');
+    assert.ok((await text.boundingBox()).height >= 8);
+    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+    const before = await text.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+    const handle = await p.locator('.sel [data-h=se]').boundingBox();
+    await p.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await p.mouse.down();
+    await p.mouse.move(handle.x + handle.width / 2 + 30, handle.y + handle.height / 2 + 20, { steps: 4 });
+    await p.mouse.up();
+    assert.ok(await text.evaluate((node, value) => parseFloat(getComputedStyle(node).fontSize) > value, before));
+    const existing = p.locator('[data-el=p1-title]');
+    await existing.dblclick();
+    await p.keyboard.press('ControlOrMeta+A');
+    await p.keyboard.press('Backspace');
+    await p.keyboard.press('Escape');
+    assert.equal(await existing.getAttribute('data-text-box'), '');
+    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+    await p.locator('[data-act=more]').click();
+    await p.locator('[data-act=source]').click();
+    const saved = await p.locator('.modal textarea').inputValue();
+    const reopened = await browser.newPage();
+    try {
+      await reopened.setContent(saved);
+      await reopened.addScriptTag({ content: editor });
+      await reopened.locator('[data-act=edit]').click();
+      await reopened.locator('[data-el=p1-title]').click();
+      assert.equal(await reopened.locator('[data-el=p1-title]').getAttribute('data-text-box'), '');
+      assert.deepEqual(await reopened.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+    } finally { await reopened.close(); }
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test("text alignment cycles with one click and adaptation stays in the element menu", async () => {
   const p = await open();
   try {

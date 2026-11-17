@@ -9349,7 +9349,7 @@ property of their respective owners.
         keepCenter(el, p, { x: initial.cx, y: initial.cy });
       }
       function isTextObject(el) {
-        return !!el && !el.matches(MEDIA) && !el.querySelector("[data-el],img,svg,canvas,video,iframe") && !!el.textContent.trim();
+        return !!el && !el.matches(MEDIA) && !el.querySelector("[data-el],img,svg,canvas,video,iframe") && (el.hasAttribute("data-text-box") || !!el.textContent.trim());
       }
       function startResize(e, dir) {
         if (S.selection.length !== 1) return;
@@ -9726,7 +9726,9 @@ property of their respective owners.
         endText();
         const el = document.createElement("div");
         el.setAttribute("data-el", elementId(b, "text"));
+        el.setAttribute("data-text-box", "");
         el.textContent = "双击编辑文字";
+        el.style.minHeight = "1em";
         if (style2) for (const [prop, value] of Object.entries(style2.values)) el.style.setProperty(prop, value);
         placeNew(el, b, style2 ? Math.min(Math.max(320, Math.round(style2.size * 9)), Math.round(b.clientWidth * 0.75)) : 320, 60);
         startText(el);
@@ -9807,7 +9809,8 @@ property of their respective owners.
         S.text = {
           el,
           before: snap([el], true),
-          board: el.closest("[data-artboard]")
+          board: el.closest("[data-artboard]"),
+          textBox: isTextObject(el)
         };
         el.contentEditable = "true";
         try {
@@ -9840,6 +9843,10 @@ property of their respective owners.
         S.text = null;
         S.range = null;
         t.el.removeAttribute("contenteditable");
+        if (t.textBox && !t.el.textContent.trim()) {
+          t.el.setAttribute("data-text-box", "");
+          if (t.el.getBoundingClientRect().height < 8) t.el.style.minHeight = "1em";
+        }
         if (document.activeElement === t.el) t.el.blur();
         getSelection().removeAllRanges();
         commit(t.before, t.board);
