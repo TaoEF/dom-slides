@@ -50,6 +50,27 @@ test('object clipboard pastes on the same page with new IDs and one undo step', 
   } finally { await c.close(); }
 });
 
+test('pasted text remains editable by double click', async () => {
+  const c = await context(), p = await open(c);
+  try {
+    await p.locator('[data-el=title]').click();
+    await p.keyboard.press('ControlOrMeta+C');
+    await p.keyboard.press('ControlOrMeta+V');
+    const pasted = p.locator('[data-el=p1-copy-1]');
+    assert.equal(await pasted.evaluate(node => node.style.getPropertyValue('-webkit-user-modify')), '');
+    await pasted.dblclick();
+    assert.equal(await pasted.getAttribute('contenteditable'), 'true');
+    await p.keyboard.type(' edited');
+    assert.match(await pasted.textContent(), /edited/);
+    await p.keyboard.press('Escape');
+    await pasted.evaluate(node => node.style.setProperty('-webkit-user-modify', 'read-only'));
+    await pasted.dblclick();
+    await p.keyboard.type(' again');
+    assert.match(await pasted.textContent(), /again/);
+    assert.deepEqual(p.errors, []);
+  } finally { await c.close(); }
+});
+
 test('multi-object clipboard crosses pages and survives closing the source tab', async () => {
   const c = await context(), source = await open(c), target = await open(c);
   try {

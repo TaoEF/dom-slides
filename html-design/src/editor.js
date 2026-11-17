@@ -88,7 +88,7 @@ import {
       html[data-editing] [data-artboard] *{animation-play-state:paused!important}
       html[data-editing] [data-artboard] [data-el]{cursor:move}
       html[data-editing] [data-artboard] [contenteditable],html[data-editing] [data-artboard] [contenteditable] *{cursor:text;user-select:text;-webkit-user-select:text}
-      html[data-editing] [data-artboard] [contenteditable]{outline:none}`,
+      html[data-editing] [data-artboard] [contenteditable]{outline:none;-webkit-user-modify:read-write!important}`,
     );
     const zoomStyle = mkStyle("zoom"),
       printStyle = mkStyle("print");

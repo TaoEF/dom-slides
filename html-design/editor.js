@@ -611,7 +611,7 @@ property of their respective owners.
     const all = (roots) => [
       ...new Set(roots.flatMap((n) => [n, ...n.querySelectorAll("*")]))
     ];
-    const ignored = /^(cursor|user-select|-webkit-user-select|caret-color|pointer-events|animation.*|transition.*)$/;
+    const ignored = /^(cursor|user-select|-webkit-user-select|-webkit-user-modify|caret-color|pointer-events|animation.*|transition.*)$/;
     const clipsOverflow = (value) => ["hidden", "clip", "scroll", "auto"].includes(value);
     function paintBounds(node) {
       let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
@@ -8579,7 +8579,7 @@ property of their respective owners.
       html[data-editing] [data-artboard] *{animation-play-state:paused!important}
       html[data-editing] [data-artboard] [data-el]{cursor:move}
       html[data-editing] [data-artboard] [contenteditable],html[data-editing] [data-artboard] [contenteditable] *{cursor:text;user-select:text;-webkit-user-select:text}
-      html[data-editing] [data-artboard] [contenteditable]{outline:none}`
+      html[data-editing] [data-artboard] [contenteditable]{outline:none;-webkit-user-modify:read-write!important}`
       );
       const zoomStyle = mkStyle("zoom"), printStyle = mkStyle("print");
       document.head.append(pageStyle, zoomStyle, printStyle);

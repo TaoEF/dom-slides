@@ -28,7 +28,7 @@ export function createWorkspaceTransfer({
     ...new Set(roots.flatMap((n) => [n, ...n.querySelectorAll("*")])),
   ];
   const ignored =
-    /^(cursor|user-select|-webkit-user-select|caret-color|pointer-events|animation.*|transition.*)$/;
+    /^(cursor|user-select|-webkit-user-select|-webkit-user-modify|caret-color|pointer-events|animation.*|transition.*)$/;
   const clipsOverflow = value => ['hidden', 'clip', 'scroll', 'auto'].includes(value);
   function paintBounds(node) {
     let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;

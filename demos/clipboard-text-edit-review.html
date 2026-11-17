@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>复制文字编辑验收</title>
+<style>
+body{margin:0;background:#ececef;font-family:Arial,"PingFang SC",sans-serif;color:#202124}
+[data-stage]{display:flex;gap:24px;padding:36px}
+[data-artboard]{box-sizing:border-box;width:1200px;height:675px;position:relative;overflow:hidden;background:white;padding:76px 92px}
+h1{font-size:55px;line-height:1.1;margin:0 0 24px}
+p{font-size:21px;line-height:1.45;margin:0 0 18px;max-width:900px}
+.hint{color:#686b73;font-size:17px;margin-top:52px}
+</style>
+</head>
+<body>
+<main data-stage>
+<section data-artboard="p1" data-mode="flow" data-title="复制文字">
+<h1 data-el="source-title">复制后的文字，应能继续编辑</h1>
+<p data-el="source-body">选中这段文字，复制并粘贴，再双击副本输入新内容。</p>
+<p data-el="source-hint" class="hint">也可以切换到第二页粘贴，检查跨页编辑。</p>
+</section>
+<section data-artboard="p2" data-mode="flow" data-title="跨页粘贴">
+<h1 data-el="target-title">第二页</h1>
+<p data-el="target-body">在这里粘贴第一页的文字，再双击修改。</p>
+</section>
+</main>
+<script data-editor src="../html-design/editor.js"></script>
+</body>
+</html>
