@@ -680,8 +680,8 @@ test("compact navigation keeps the first thumbnail intact and text layout contro
       await p.locator('[data-el=p1-title]').click();
       await p.screenshot({ path: `.export-test/ui-refinement-${width}.png` });
     }
-    assert.equal(await p.locator('[data-act=add-text]').textContent(), 'T');
-    assert.equal(await p.locator('[data-act=text-styles] svg').count(), 1);
+    assert.equal(await p.locator('[data-act=add-text] svg').count(), 2);
+    assert.equal(await p.locator('[data-act=text-styles]').count(), 0);
     assert.equal(await p.locator('[data-act=add-image] svg').count(), 1);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
@@ -695,8 +695,15 @@ test('text selection has width handles and one scale corner; insert menu reuses 
     assert.deepEqual(handles, ['e', 'se', 'w']);
     await p.locator('[data-el=p1-image]').click();
     assert.equal(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').length), 8);
-    await p.locator('[data-act=text-styles]').click();
-    assert.deepEqual(await p.locator('[data-menu=text-styles] button').allTextContents(), ['Scalesmall text']);
+    const originalCount = await p.locator('[data-artboard=p1] [data-el]').count();
+    await p.locator('[data-act=add-text]').click();
+    assert.equal(await p.locator('[data-artboard=p1] [data-el]').count(), originalCount, 'opening the menu does not insert text');
+    assert.equal(await p.locator('[data-act=add-text]').getAttribute('aria-expanded'), 'true');
+    await p.locator('[data-act=add-text]').click();
+    assert.equal(await p.locator('[data-act=add-text]').getAttribute('aria-expanded'), 'false');
+    await p.locator('[data-act=add-text]').click();
+    assert.match((await p.locator('[data-menu=text-styles] button').first().textContent()), /64px/);
+    assert.doesNotMatch((await p.locator('[data-menu=text-styles]').textContent()), /Scalesmall text/);
     await p.locator('[data-menu=text-styles] button').click();
     const inserted = p.locator('[data-artboard=p1] [data-el^=p1-text-]');
     assert.equal(await inserted.evaluate(node => getComputedStyle(node).fontSize), '64px');
@@ -705,8 +712,10 @@ test('text selection has width handles and one scale corner; insert menu reuses 
     await p.keyboard.press('Escape');
     await p.locator('[data-artboard=p2]').evaluate(board => board.querySelector('[data-el]').remove());
     await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
-    await p.locator('[data-act=text-styles]').click();
-    assert.deepEqual(await p.locator('[data-menu=text-styles] button').allTextContents(), ['大标题','小标题','正文']);
+    await p.locator('[data-act=add-text]').click();
+    const defaults = await p.locator('[data-menu=text-styles] button').allTextContents();
+    assert.deepEqual(defaults.map(item => item.split(' · ')[0]), ['大标题','小标题','正文']);
+    assert.ok(defaults.every(item => /\d+px/.test(item)));
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
@@ -723,10 +732,12 @@ test('text style menu keeps four largest distinct styles on the current page', a
         board.append(node);
       }
     });
-    await p.locator('[data-act=text-styles]').click();
+    await p.locator('[data-act=add-text]').click();
     const items = p.locator('[data-menu=text-styles] button');
     assert.equal(await items.count(), 4);
-    assert.deepEqual(await items.allTextContents(), ['Sample 1','Scalesmall text','Sample 2','Sample 0']);
+    const descriptions = await items.allTextContents();
+    assert.deepEqual(descriptions.map(item => item.match(/\d+(?:\.\d+)?px/)?.[0]), ['72px','64px','52px','44px']);
+    assert.ok(descriptions.every(item => !/Sample|Scalesmall/.test(item)));
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
@@ -735,6 +746,7 @@ test('an emptied text box keeps its three handles and font scaling', async () =>
   const p = await open();
   try {
     await p.locator('[data-act=add-text]').click();
+    await p.locator('[data-menu=text-styles] button').first().click();
     const text = p.locator('[data-artboard=p1] [data-text-box]');
     await p.keyboard.press('ControlOrMeta+A');
     await p.keyboard.press('Backspace');

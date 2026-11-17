@@ -1170,6 +1170,16 @@ import {
     }
     const textStyleProps = ['font-family','font-size','font-weight','font-style','line-height','letter-spacing','color','text-align','text-transform'];
     let textStyleChoices = [];
+    function describeTextStyle(values) {
+      const family = values['font-family'].split(',')[0].trim().replace(/^['"]|['"]$/g, '');
+      const size = Math.round(parseFloat(values['font-size']) * 10) / 10;
+      const weight = parseFloat(values['font-weight']);
+      const spacing = parseFloat(values['letter-spacing']);
+      return [family, `${size}px`, weight >= 600 ? '加粗' : weight >= 500 ? '中等' : null,
+        values['font-style'] === 'italic' ? '斜体' : null,
+        Number.isFinite(spacing) && Math.abs(spacing) > .01 ? `字距${Math.round(spacing * 10) / 10}px` : null]
+        .filter(Boolean).join(' · ');
+    }
     function availableTextStyles(board) {
       const seen = new Set(), styles = [];
       for (const node of board.querySelectorAll('[data-el]')) {
@@ -1180,18 +1190,19 @@ import {
         const key = JSON.stringify(values);
         if (seen.has(key)) continue;
         seen.add(key);
-        styles.push({ label: node.textContent.trim().replace(/\s+/g, ' ').slice(0, 24), size, values });
+        styles.push({ label: describeTextStyle(values), size, values });
       }
       styles.sort((a, b) => b.size - a.size);
       if (styles.length) return styles.slice(0, 4);
       const scale = Math.min(1.25, board.clientWidth / 1280);
       const base = getComputedStyle(board);
-      return [['大标题',64,48,700,'1.1'],['小标题',36,30,600,'1.25'],['正文',22,20,400,'1.5']].map(([label,size,min,weight,line]) => ({
-        label, size: Math.max(min, Math.round(size * scale)), values: {
+      return [['大标题',64,48,700,'1.1'],['小标题',36,30,600,'1.25'],['正文',22,20,400,'1.5']].map(([name,size,min,weight,line]) => {
+        const values = {
           'font-family': base.fontFamily, 'font-size': `${Math.max(min, Math.round(size * scale))}px`,
           'font-weight': String(weight), 'line-height': line, color: base.color,
-        },
-      }));
+        };
+        return { label: `${name} · ${describeTextStyle(values)}`, size: parseFloat(values['font-size']), values };
+      });
     }
     function showTextStyles(button) {
       const board = activeBoard();
@@ -1201,10 +1212,11 @@ import {
       panel.replaceChildren(...textStyleChoices.map((style, index) => {
         const item = document.createElement('button');
         item.type = 'button'; item.dataset.act = 'text-style-insert'; item.dataset.styleIndex = index;
-        item.textContent = style.label;
-        item.style.fontFamily = style.values['font-family'];
-        item.style.fontSize = `${Math.min(27, Math.max(13, style.size / 2))}px`;
-        item.style.fontWeight = style.values['font-weight'];
+        item.title = style.label;
+        const swatch = document.createElement('span'), description = document.createElement('span');
+        swatch.className = 'style-swatch'; swatch.style.backgroundColor = style.values.color;
+        description.className = 'style-description'; description.textContent = style.label;
+        item.append(swatch, description);
         return item;
       }));
       openMenu('text-styles', button);
@@ -2033,8 +2045,7 @@ import {
       stop: () => viewport.stop(),
       flow: () => setMode(activeBoard(), "flow"),
       artboard: () => setMode(activeBoard(), "artboard"),
-      "add-text": () => addText(),
-      "text-styles": (btn) => showTextStyles(btn),
+      "add-text": (btn) => showTextStyles(btn),
       "text-style-insert": (btn) => addText(textStyleChoices[Number(btn.dataset.styleIndex)]),
       "add-image": () => {
         S.replace = null;
@@ -2177,7 +2188,7 @@ import {
       const act = btn.dataset.act;
       if (!act) return;
       if (
-        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape", "text-styles"].includes(act)
+        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape", "add-text"].includes(act)
       )
         closeMenus();
       runAction(act, btn);
