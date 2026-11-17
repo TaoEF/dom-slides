@@ -71,6 +71,33 @@ test('pasted text remains editable by double click', async () => {
   } finally { await c.close(); }
 });
 
+test('copied text grows when narrowed, including an older fixed-height copy', async () => {
+  const c = await context(), p = await open(c);
+  try {
+    await p.locator('[data-el=title]').evaluate(node => { node.textContent = 'Copied text should wrap across several lines'; });
+    await p.locator('[data-el=title]').click();
+    await p.keyboard.press('ControlOrMeta+C');
+    await p.keyboard.press('ControlOrMeta+V');
+    const copied = p.locator('[data-el=p1-copy-1]');
+    assert.equal(await copied.evaluate(node => node.style.height), 'auto');
+    const initial = (await copied.boundingBox()).height;
+    await copied.evaluate(node => { node.style.width = '140px'; });
+    assert.ok((await copied.boundingBox()).height > initial * 2);
+    await copied.evaluate((node, h) => {
+      node.style.width = '740px'; node.style.height = `${h}px`; node.style.blockSize = `${h}px`;
+    }, initial);
+    await copied.click();
+    const handle = await p.locator('.sel [data-h=e]').boundingBox();
+    await p.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await p.mouse.down();
+    await p.mouse.move(handle.x + handle.width / 2 - 600, handle.y + handle.height / 2, { steps: 5 });
+    await p.mouse.up();
+    assert.equal(await copied.evaluate(node => node.style.height), 'auto');
+    assert.ok((await copied.boundingBox()).height > initial * 2);
+    assert.deepEqual(p.errors, []);
+  } finally { await c.close(); }
+});
+
 test('multi-object clipboard crosses pages and survives closing the source tab', async () => {
   const c = await context(), source = await open(c), target = await open(c);
   try {
@@ -198,6 +225,7 @@ test('cross-tab paste rebases relative links and rekeys SVG references', async (
     await target.locator('.thumb[data-page-id=p2] .thumb-main').click();
     assert.equal(await target.evaluate(() => document.querySelector('html-design-editor').shadowRoot.activeElement?.classList.contains('thumb-main')), true);
     await target.keyboard.press('ControlOrMeta+V');
+    assert.equal(await target.locator('[data-artboard=p2] a').count(), 1, await target.locator('.toast').textContent());
     assert.equal(await target.locator('[data-artboard=p2] a').getAttribute('href'), 'http://example.test/source/chapter.html');
     const svg = target.locator('[data-artboard=p2] svg[data-el]');
     const id = await svg.locator('linearGradient').getAttribute('id');

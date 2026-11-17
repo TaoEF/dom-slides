@@ -81,6 +81,8 @@ export function createWorkspaceTransfer({
     const x = a.getBoundingClientRect(), y = b.getBoundingClientRect();
     return ['left', 'top', 'right', 'bottom'].every(key => Math.abs(x[key] - y[key]) < .5);
   }
+  const plainText = node => !node.matches('img,video,canvas,svg,iframe,picture,[data-crop-frame]') &&
+    !node.querySelector('[data-el],img,svg,canvas,video,iframe') && !!node.textContent.trim();
   function capture(roots, { clipboard = false } = {}) {
     roots = selectionRoots(roots);
     if (!roots.length) throw new Error("请先选择元素");
@@ -93,6 +95,8 @@ export function createWorkspaceTransfer({
       const flatImageMask = imageMask && sameBox(selected, parent);
       const framedImageMask = imageMask && !flatImageMask;
       const source = framedImageMask ? parent : selected;
+      const autoTextHeight = plainText(source) && getComputedStyle(source).display === 'block' &&
+        !source.style.height && !source.style.blockSize;
       for (let ancestor = source.parentElement; ancestor && !ancestor.matches('[data-artboard]'); ancestor = ancestor.parentElement) {
         if (ancestor.matches('picture'))
           throw new Error('图片依赖 picture 来源，暂不能单独跨页复制');
@@ -150,6 +154,11 @@ export function createWorkspaceTransfer({
         image.removeAttribute('data-el');
         image.dataset.cropImage = '';
       }
+      if (autoTextHeight) {
+        template.style.removeProperty('height');
+        template.style.removeProperty('block-size');
+        template.style.removeProperty('inline-size');
+      }
       const leaves = groupRoots([source]).map((node) => {
         const g = elementGeometry(node);
         if (!g.supported) throw new Error("这种变换暂不支持跨画布复用");
@@ -168,7 +177,7 @@ export function createWorkspaceTransfer({
         const r = node.getBoundingClientRect();
         return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height };
       });
-      return { source, template, pairs, leaves, frames };
+      return { source, template, pairs, leaves, frames, autoTextHeight };
     });
     const bounds = unionRect(objects.map(object => object.source));
     return {
@@ -203,7 +212,7 @@ export function createWorkspaceTransfer({
       source: roots[0]?.closest("[data-artboard]"),
     };
   }
-  function position(node, g, board, cx, cy, zoom) {
+  function position(node, g, board, cx, cy, zoom, autoTextHeight = false) {
     const r = board.getBoundingClientRect(),
       cs = getComputedStyle(board),
       scale = g.scale / zoom;
@@ -215,7 +224,7 @@ export function createWorkspaceTransfer({
       margin: "0px",
       "box-sizing": "border-box",
       width: `${g.w}px`,
-      height: `${g.h}px`,
+      height: autoTextHeight ? 'auto' : `${g.h}px`,
       "min-width": "0px",
       "min-height": "0px",
       "max-width": "none",
@@ -230,6 +239,10 @@ export function createWorkspaceTransfer({
       top: `${(cy - r.top) / S.zoom - (parseFloat(cs.borderTopWidth) || 0) - g.h / 2}px`,
     }))
       set(key, value);
+    if (autoTextHeight) {
+      node.style.setProperty('block-size', 'auto');
+      node.style.removeProperty('inline-size');
+    }
   }
   function install(packet, board, { copy, center = null } = {}) {
     const result = [],
@@ -270,7 +283,7 @@ export function createWorkspaceTransfer({
             cy = center
               ? center.y + ((leaf.g.cy - packet.cy) / packet.zoom) * S.zoom
               : leaf.g.cy;
-          position(target, leaf.g, board, cx, cy, packet.zoom);
+          position(target, leaf.g, board, cx, cy, packet.zoom, object.autoTextHeight && target === node);
           expected.push({ node: target, cx, cy, g: leaf.g });
         }
       }
@@ -484,6 +497,7 @@ export function createWorkspaceTransfer({
             html: object.template.outerHTML,
             frames: object.frames,
             leaves: object.leaves.map(leaf => ({ index: nodes.indexOf(leaf.copy), g: leaf.g })),
+            autoTextHeight: object.autoTextHeight,
           };
         }),
       });
@@ -553,7 +567,7 @@ export function createWorkspaceTransfer({
         return { copy: nodes[leaf.index], g: leaf.g };
       });
       if (!leaves.length) throw new Error('剪贴板对象没有可放置的元素');
-      return { template: root, frames, leaves };
+      return { template: root, frames, leaves, autoTextHeight: object.autoTextHeight === true };
     });
     return { objects, zoom: wire.zoom, cx: wire.cx, cy: wire.cy };
   }

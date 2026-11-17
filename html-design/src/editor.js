@@ -902,6 +902,10 @@ import {
           el.style.boxSizing = 'border-box'; el.style.maxWidth = 'none';
           if (dir !== 'n' && dir !== 's') el.style.width = Math.round(Math.max(8, w) * 1000) / 1000 + 'px';
           if (dir !== 'e' && dir !== 'w') { el.style[hp] = Math.round(Math.max(8, h) * 1000) / 1000 + 'px'; if (el.matches('[data-crop-frame]')) cropImage(el).style.setProperty('height','100%','important'); }
+          if (text && dir.length === 1 && el.scrollHeight > el.clientHeight + 1) {
+            el.style.height = 'auto';
+            el.style.blockSize = 'auto';
+          }
           if (el.matches('svg[data-shape]')) renderShape(el, { width: Math.max(8, w), height: Math.max(8, h) });
           setPos(el, p, p.x, p.y);
           const now = elementGeometry(el), current = resizeAnchor(now, dir);
