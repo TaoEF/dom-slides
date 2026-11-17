@@ -1213,10 +1213,15 @@ import {
         const item = document.createElement('button');
         item.type = 'button'; item.dataset.act = 'text-style-insert'; item.dataset.styleIndex = index;
         item.title = style.label;
-        const swatch = document.createElement('span'), description = document.createElement('span');
-        swatch.className = 'style-swatch'; swatch.style.backgroundColor = style.values.color;
+        const preview = document.createElement('span'), description = document.createElement('span');
+        preview.className = 'style-preview'; preview.setAttribute('aria-hidden', 'true'); preview.textContent = 'Aa';
+        preview.style.fontFamily = style.values['font-family'];
+        preview.style.fontSize = `${Math.min(27, Math.max(13, style.size / 2))}px`;
+        preview.style.fontWeight = style.values['font-weight'];
+        preview.style.fontStyle = style.values['font-style'] || 'normal';
+        preview.style.color = style.values.color;
         description.className = 'style-description'; description.textContent = style.label;
-        item.append(swatch, description);
+        item.append(preview, description);
         return item;
       }));
       openMenu('text-styles', button);

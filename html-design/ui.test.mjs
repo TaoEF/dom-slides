@@ -703,6 +703,8 @@ test('text selection has width handles and one scale corner; insert menu reuses 
     assert.equal(await p.locator('[data-act=add-text]').getAttribute('aria-expanded'), 'false');
     await p.locator('[data-act=add-text]').click();
     assert.match((await p.locator('[data-menu=text-styles] button').first().textContent()), /64px/);
+    assert.equal(await p.locator('[data-menu=text-styles] .style-swatch').count(), 0);
+    assert.equal(await p.locator('[data-menu=text-styles] .style-preview').first().evaluate(node => getComputedStyle(node).fontSize), '27px');
     assert.doesNotMatch((await p.locator('[data-menu=text-styles]').textContent()), /Scalesmall text/);
     await p.locator('[data-menu=text-styles] button').click();
     const inserted = p.locator('[data-artboard=p1] [data-el^=p1-text-]');
@@ -713,9 +715,11 @@ test('text selection has width handles and one scale corner; insert menu reuses 
     await p.locator('[data-artboard=p2]').evaluate(board => board.querySelector('[data-el]').remove());
     await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
     await p.locator('[data-act=add-text]').click();
-    const defaults = await p.locator('[data-menu=text-styles] button').allTextContents();
+    const defaults = await p.locator('[data-menu=text-styles] .style-description').allTextContents();
     assert.deepEqual(defaults.map(item => item.split(' · ')[0]), ['大标题','小标题','正文']);
     assert.ok(defaults.every(item => /\d+px/.test(item)));
+    const previewSizes = await p.locator('[data-menu=text-styles] .style-preview').evaluateAll(nodes => nodes.map(node => parseFloat(getComputedStyle(node).fontSize)));
+    assert.ok(previewSizes[0] > previewSizes[1] && previewSizes[1] > previewSizes[2]);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
@@ -735,7 +739,7 @@ test('text style menu keeps four largest distinct styles on the current page', a
     await p.locator('[data-act=add-text]').click();
     const items = p.locator('[data-menu=text-styles] button');
     assert.equal(await items.count(), 4);
-    const descriptions = await items.allTextContents();
+    const descriptions = await p.locator('[data-menu=text-styles] .style-description').allTextContents();
     assert.deepEqual(descriptions.map(item => item.match(/\d+(?:\.\d+)?px/)?.[0]), ['72px','64px','52px','44px']);
     assert.ok(descriptions.every(item => !/Sample|Scalesmall/.test(item)));
     assert.deepEqual(p.errors, []);
