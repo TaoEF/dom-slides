@@ -1862,6 +1862,12 @@ import {
     );
 
     addEventListener('copy',e=>{if(!crop.active)transfer.copyEvent(e);},true);
+    addEventListener('cut',e=>{
+      if (!crop.active && transfer.cutEvent(e)) {
+        removeEl(S.sel);
+        toast('已剪切元素 · 可撤销');
+      }
+    },true);
     addEventListener('paste',e=>{if(!crop.active)transfer.pasteEvent(e);},true);
     addEventListener(
       "paste",
@@ -2097,6 +2103,8 @@ import {
       ungroup: ungroupSelection,
       "group-enter": () => enterGroup(S.sel),
       "group-exit": exitGroup,
+      "element-copy": () => { if (S.sel && !document.execCommand('copy')) toast('无法写入剪贴板，请使用复制快捷键'); },
+      "element-cut": () => { if (S.sel && !document.execCommand('cut')) toast('无法写入剪贴板，请使用剪切快捷键'); },
       "element-duplicate": () => S.sel && duplicate(S.sel),
       "element-delete": () => S.sel && removeEl(S.sel),
       "element-front": () => layer(true),
@@ -2167,7 +2175,7 @@ import {
       "text-fit",
       "text-align",
       "group", "ungroup", "group-enter", "group-exit", "select-all",
-      "element-duplicate",
+      "element-copy", "element-cut", "element-duplicate",
       "element-delete",
       "element-front",
       "element-back",
