@@ -612,6 +612,28 @@ test("text corners scale nested typography at 50% and 200%; side handles only re
   }
 });
 
+test('bottom text handle shortens a fixed frame after font size decreases without changing type size', async () => {
+  const p = await open();
+  try {
+    const title = p.locator('[data-el=p1-title]');
+    await title.evaluate(node => { node.style.height = '200px'; node.style.minHeight = '200px'; });
+    await title.click();
+    await p.locator('.fs').fill('32');
+    await p.locator('.fs').press('Enter');
+    await p.keyboard.press('Escape');
+    await title.click();
+    assert.equal(await title.evaluate(node => node.offsetHeight), 200);
+    const scale = await title.evaluate(node => node.getBoundingClientRect().height / node.offsetHeight);
+    await dragHandle(p, 's', 0, -70 * scale);
+    near(await title.evaluate(node => node.offsetHeight), 130, 2);
+    assert.equal(await title.evaluate(node => getComputedStyle(node).fontSize), '32px');
+    assert.equal(await title.evaluate(node => node.scrollHeight <= node.clientHeight + 1), true, 'text remains visible');
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await title.evaluate(node => node.offsetHeight), 200);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test("image fit modes keep the frame and source, and undo restores the mode", async () => {
   const p = await open();
   try {
@@ -687,12 +709,12 @@ test("compact navigation keeps the first thumbnail intact and text layout contro
   } finally { await p.close(); }
 });
 
-test('text selection has width handles and one scale corner; insert menu reuses page styles or three defaults', async () => {
+test('text selection has width, height and one scale corner; insert menu reuses page styles or three defaults', async () => {
   const p = await open();
   try {
     await p.locator('[data-el=p1-title]').click();
     const handles = await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h));
-    assert.deepEqual(handles, ['e', 'se', 'w']);
+    assert.deepEqual(handles, ['e', 'se', 's', 'w']);
     await p.locator('[data-el=p1-image]').click();
     assert.equal(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').length), 8);
     const originalCount = await p.locator('[data-artboard=p1] [data-el]').count();
@@ -788,7 +810,7 @@ test('color palette finds colors on other pages and applies them to selected tex
   } finally { await p.close(); }
 });
 
-test('an emptied text box keeps its three handles and font scaling', async () => {
+test('an emptied text box keeps its four handles and font scaling', async () => {
   const p = await open();
   try {
     await p.locator('[data-act=add-text]').click();
@@ -800,7 +822,7 @@ test('an emptied text box keeps its three handles and font scaling', async () =>
     await p.keyboard.press('Escape');
     assert.equal(await text.getAttribute('data-text-box'), '');
     assert.ok((await text.boundingBox()).height >= 8);
-    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','s','w']);
     const before = await text.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
     const handle = await p.locator('.sel [data-h=se]').boundingBox();
     await p.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
@@ -814,7 +836,7 @@ test('an emptied text box keeps its three handles and font scaling', async () =>
     await p.keyboard.press('Backspace');
     await p.keyboard.press('Escape');
     assert.equal(await existing.getAttribute('data-text-box'), '');
-    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','s','w']);
     await p.locator('[data-act=more]').click();
     await p.locator('[data-act=source]').click();
     const saved = await p.locator('.modal textarea').inputValue();
@@ -825,7 +847,7 @@ test('an emptied text box keeps its three handles and font scaling', async () =>
       await reopened.locator('[data-act=edit]').click();
       await reopened.locator('[data-el=p1-title]').click();
       assert.equal(await reopened.locator('[data-el=p1-title]').getAttribute('data-text-box'), '');
-      assert.deepEqual(await reopened.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+      assert.deepEqual(await reopened.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','s','w']);
     } finally { await reopened.close(); }
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }

@@ -484,7 +484,7 @@ button.primary:hover:not(:disabled) {
   display: none;
 }
 .sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }
-.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="se"]) { display:none; }
+.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="s"]):not([data-h="se"]) { display:none; }
 .sel.unsupported i { display:none; }
 .rotate-handle {
   position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;

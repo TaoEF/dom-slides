@@ -874,7 +874,7 @@ import {
       const media = el.matches(MEDIA), text = isTextObject(el);
       const metrics = text && dir.length === 2 ? textMetrics(el) : null;
       const before = snap(metrics ? metrics.map(m => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches('svg[data-shape]'));
-      const hp = media || el.style.height ? 'height' : 'minHeight';
+      const hp = media || el.style.height || (text && dir === 's') ? 'height' : 'minHeight';
       const x0 = e.clientX, y0 = e.clientY;
       let g = initial, p = getPos(el), anchor, moved = false;
       S.drag = {
@@ -901,6 +901,7 @@ import {
             w = w0 * k; h = h0 * k;
           }
           el.style.boxSizing = 'border-box'; el.style.maxWidth = 'none';
+          if (text && dir === 's') { el.style.minHeight = '0px'; el.style.maxHeight = 'none'; }
           if (dir !== 'n' && dir !== 's') el.style.width = Math.round(Math.max(8, w) * 1000) / 1000 + 'px';
           if (dir !== 'e' && dir !== 'w') { el.style[hp] = Math.round(Math.max(8, h) * 1000) / 1000 + 'px'; if (el.matches('[data-crop-frame]')) cropImage(el).style.setProperty('height','100%','important'); }
           if (text && dir.length === 1 && el.scrollHeight > el.clientHeight + 1) {
