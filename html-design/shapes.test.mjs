@@ -114,14 +114,20 @@ test('every inserted shape responds to its visible controls', async () => {
         });
         assert.ok(gap < 4, `${kind} fills its selection frame (gap ${gap}px)`);
       }
-      await p.locator('[data-shape-prop=stroke]').fill('#ef4444');
-      assert.equal(await shape.locator(':scope > *').getAttribute('stroke'), '#ef4444', `${kind} stroke`);
+      await p.locator('[data-act=shape-stroke-color]').click();
+      await p.locator('[data-palette-custom]').click();
+      await p.locator('.palette-hex').fill('#ef4444');
+      await p.locator('.palette-hex-form button').click();
+      assert.equal(await shape.locator(':scope > *').getAttribute('stroke'), '#EF4444', `${kind} stroke`);
       await p.locator('[data-shape-prop=width]').fill('5');
       assert.equal(await shape.locator(':scope > *').getAttribute('stroke-width'), '5', `${kind} width`);
       assert.equal(await shape.locator(':scope > *').getAttribute('vector-effect'), null, `${kind} stroke follows canvas zoom`);
       if (kind !== 'line' && kind !== 'arrow') {
-        await p.locator('[data-shape-prop=fill]').fill('#22c55e');
-        assert.equal(await shape.locator(':scope > *').getAttribute('fill'), '#22c55e', `${kind} fill`);
+        await p.locator('[data-act=shape-fill-color]').click();
+        await p.locator('[data-palette-custom]').click();
+        await p.locator('.palette-hex').fill('#22c55e');
+        await p.locator('.palette-hex-form button').click();
+        assert.equal(await shape.locator(':scope > *').getAttribute('fill'), '#22C55E', `${kind} fill`);
       }
       if (['rect', 'triangle', 'diamond', 'star', 'blockArrow'].includes(kind)) {
         const before = await shape.innerHTML();
