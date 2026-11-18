@@ -9742,18 +9742,29 @@ property of their respective owners.
       }
       function availableTextStyles(board) {
         const seen = /* @__PURE__ */ new Set(), styles = [];
-        for (const node of board.querySelectorAll("[data-el]")) {
-          if (!isTextObject(node) || !visible(node)) continue;
-          const computed = getComputedStyle(node), size = parseFloat(computed.fontSize);
-          if (!Number.isFinite(size) || size < 6) continue;
-          const values = Object.fromEntries(textStyleProps.map((prop) => [prop, computed.getPropertyValue(prop)]));
-          const key2 = JSON.stringify(values);
-          if (seen.has(key2)) continue;
-          seen.add(key2);
-          styles.push({ label: describeTextStyle(values), size, values });
+        for (const page of stage.querySelectorAll("[data-artboard]")) {
+          for (const node of page.querySelectorAll("[data-el]")) {
+            if (!isTextObject(node)) continue;
+            let shown = true;
+            for (let ancestor = node; ancestor && ancestor !== page; ancestor = ancestor.parentElement) {
+              const style2 = getComputedStyle(ancestor);
+              if (style2.display === "none" || style2.visibility !== "visible" || style2.opacity === "0" || style2.contentVisibility === "hidden") {
+                shown = false;
+                break;
+              }
+            }
+            if (!shown) continue;
+            const computed = getComputedStyle(node), size = parseFloat(computed.fontSize);
+            if (!Number.isFinite(size) || size < 6) continue;
+            const values = Object.fromEntries(textStyleProps.map((prop) => [prop, computed.getPropertyValue(prop)]));
+            const key2 = JSON.stringify(textStyleProps.filter((prop) => prop !== "color").map((prop) => values[prop]));
+            if (seen.has(key2)) continue;
+            seen.add(key2);
+            styles.push({ label: describeTextStyle(values), size, values });
+          }
         }
         styles.sort((a, b) => b.size - a.size);
-        if (styles.length) return styles.slice(0, 4);
+        if (styles.length) return styles;
         const scale = Math.min(1.25, board.clientWidth / 1280);
         const base = getComputedStyle(board);
         return [["大标题", 64, 48, 700, "1.1"], ["小标题", 36, 30, 600, "1.25"], ["正文", 22, 20, 400, "1.5"]].map(([name, size, min, weight, line]) => {
@@ -9786,7 +9797,7 @@ property of their respective owners.
           preview.style.fontSize = `${Math.min(27, Math.max(13, style2.size / 2))}px`;
           preview.style.fontWeight = style2.values["font-weight"];
           preview.style.fontStyle = style2.values["font-style"] || "normal";
-          preview.style.color = style2.values.color;
+          preview.style.color = "#111";
           description.className = "style-description";
           description.textContent = style2.label;
           item.append(preview, description);
