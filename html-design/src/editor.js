@@ -1320,6 +1320,19 @@ import {
     });
 
     /* ---------- 改字 + 文本工具条 ---------- */
+    function growTextToFit(el) {
+      if (!el || el.scrollHeight <= el.clientHeight + 1) return;
+      // Keep the author's spare height; only release a frame once content exceeds it.
+      el.style.maxHeight = 'none';
+      el.style.height = 'auto';
+      el.style.blockSize = 'auto';
+      if (el.scrollHeight > el.clientHeight + 1) {
+        const cs = getComputedStyle(el);
+        const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+        const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        el.style.height = Math.ceil(el.scrollHeight + (cs.boxSizing === 'border-box' ? border : -padding)) + 'px';
+      }
+    }
     function startText(el, x, y) {
       if (
         !el ||
@@ -1362,6 +1375,7 @@ import {
     function endText() {
       const t = S.text;
       if (!t) return;
+      if (t.textBox) growTextToFit(t.el);
       S.text = null;
       S.range = null;
       t.el.removeAttribute("contenteditable");
@@ -1413,6 +1427,7 @@ import {
       }
       if (s.rangeCount && el.contains(s.anchorNode))
         S.range = s.getRangeAt(0).cloneRange();
+      if (t.textBox) growTextToFit(el);
       persistence?.markDirty();
       syncTbar();
       drawSel();
@@ -1848,6 +1863,7 @@ import {
           const editable = e.target.isContentEditable;
           if (!editable && !key) e.preventDefault();
           if (type === "input") {
+            if (S.text?.textBox && S.text.el.contains(e.target)) growTextToFit(S.text.el);
             persistence?.markDirty();
             drawSel();
           }

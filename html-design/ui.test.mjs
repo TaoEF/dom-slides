@@ -634,6 +634,41 @@ test('bottom text handle shortens a fixed frame after font size decreases withou
   } finally { await p.close(); }
 });
 
+test('Enter grows a fixed text frame only when its content overflows and undo restores both', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate(board => {
+      const box = document.createElement('div');
+      box.dataset.el = 'enter-grow';
+      box.dataset.textBox = '';
+      box.textContent = 'Hello';
+      box.style.cssText = 'position:absolute;left:370px;top:180px;width:240px;height:48px;min-height:48px;overflow:hidden;font:32px/40px Arial';
+      board.append(box);
+    });
+    const box = p.locator('[data-el=enter-grow]');
+    await box.dblclick();
+    await p.keyboard.press('End');
+    await p.keyboard.press('Enter');
+    await p.keyboard.type('World');
+    assert.ok(await box.evaluate(node => node.offsetHeight) >= 80, 'the second line expands the frame while typing');
+    await p.keyboard.press('Enter');
+    assert.ok(await box.evaluate(node => node.offsetHeight) >= 120, 'a further line expands it again');
+    assert.equal(await box.evaluate(node => node.scrollHeight <= node.clientHeight + 1), true, 'new lines remain visible');
+    await p.keyboard.press('Escape');
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await box.evaluate(node => node.offsetHeight), 48);
+    assert.equal(await box.textContent(), 'Hello');
+    await p.locator('[data-act=redo]').click();
+    assert.ok(await box.evaluate(node => node.offsetHeight) >= 120);
+    await box.dblclick();
+    await p.keyboard.press('ControlOrMeta+A');
+    await p.keyboard.type('Hi');
+    await p.keyboard.press('Escape');
+    assert.ok(await box.evaluate(node => node.offsetHeight) >= 120, 'editing fewer lines preserves the existing frame height');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test("image fit modes keep the frame and source, and undo restores the mode", async () => {
   const p = await open();
   try {

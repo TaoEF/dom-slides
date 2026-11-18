@@ -9958,6 +9958,18 @@ property of their respective owners.
         });
         else files.forEach((f) => readFile(f, addImage));
       });
+      function growTextToFit(el) {
+        if (!el || el.scrollHeight <= el.clientHeight + 1) return;
+        el.style.maxHeight = "none";
+        el.style.height = "auto";
+        el.style.blockSize = "auto";
+        if (el.scrollHeight > el.clientHeight + 1) {
+          const cs = getComputedStyle(el);
+          const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+          const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+          el.style.height = Math.ceil(el.scrollHeight + (cs.boxSizing === "border-box" ? border : -padding)) + "px";
+        }
+      }
       function startText(el, x, y) {
         if (!el || S.text?.el === el || el.matches(MEDIA) || el.querySelector("[data-el]"))
           return;
@@ -9996,6 +10008,7 @@ property of their respective owners.
       function endText() {
         const t = S.text;
         if (!t) return;
+        if (t.textBox) growTextToFit(t.el);
         S.text = null;
         S.range = null;
         t.el.removeAttribute("contenteditable");
@@ -10045,6 +10058,7 @@ property of their respective owners.
         }
         if (s.rangeCount && el.contains(s.anchorNode))
           S.range = s.getRangeAt(0).cloneRange();
+        if (t.textBox) growTextToFit(el);
         persistence?.markDirty();
         syncTbar();
         drawSel();
@@ -10471,6 +10485,7 @@ property of their respective owners.
             const editable = e.target.isContentEditable;
             if (!editable && !key2) e.preventDefault();
             if (type === "input") {
+              if (S.text?.textBox && S.text.el.contains(e.target)) growTextToFit(S.text.el);
               persistence?.markDirty();
               drawSel();
             }
