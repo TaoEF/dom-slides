@@ -13,6 +13,7 @@ import { createPages } from "./pages.js";
 import { textMetrics, scaleText } from "./typography.js";
 import { createTextLayout } from "./text-layout.js";
 import { icon } from "./icons.js";
+import { documentColors, hexColor, hexToHsv, hsvToHex, recommendedColors } from './colors.js';
 import { makeShape, renderShape, shapeHasFill, shapeHasAdjust, shapeHasRadius } from './shapes.js';
 import { rekeyDOMIds } from "./identifiers.js";
 import { createGuides } from "./guides.js";
@@ -873,7 +874,7 @@ import {
       const media = el.matches(MEDIA), text = isTextObject(el);
       const metrics = text && dir.length === 2 ? textMetrics(el) : null;
       const before = snap(metrics ? metrics.map(m => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches('svg[data-shape]'));
-      const hp = media || el.style.height ? 'height' : 'minHeight';
+      const hp = media || el.style.height || (text && dir === 's') ? 'height' : 'minHeight';
       const x0 = e.clientX, y0 = e.clientY;
       let g = initial, p = getPos(el), anchor, moved = false;
       S.drag = {
@@ -900,6 +901,7 @@ import {
             w = w0 * k; h = h0 * k;
           }
           el.style.boxSizing = 'border-box'; el.style.maxWidth = 'none';
+          if (text && dir === 's') { el.style.minHeight = '0px'; el.style.maxHeight = 'none'; }
           if (dir !== 'n' && dir !== 's') el.style.width = Math.round(Math.max(8, w) * 1000) / 1000 + 'px';
           if (dir !== 'e' && dir !== 'w') { el.style[hp] = Math.round(Math.max(8, h) * 1000) / 1000 + 'px'; if (el.matches('[data-crop-frame]')) cropImage(el).style.setProperty('height','100%','important'); }
           if (text && dir.length === 1 && el.scrollHeight > el.clientHeight + 1) {
@@ -1182,18 +1184,31 @@ import {
     }
     function availableTextStyles(board) {
       const seen = new Set(), styles = [];
-      for (const node of board.querySelectorAll('[data-el]')) {
-        if (!isTextObject(node) || !visible(node)) continue;
-        const computed = getComputedStyle(node), size = parseFloat(computed.fontSize);
-        if (!Number.isFinite(size) || size < 6) continue;
-        const values = Object.fromEntries(textStyleProps.map(prop => [prop, computed.getPropertyValue(prop)]));
-        const key = JSON.stringify(values);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        styles.push({ label: describeTextStyle(values), size, values });
+      for (const page of stage.querySelectorAll('[data-artboard]')) {
+        for (const node of page.querySelectorAll('[data-el]')) {
+          if (!isTextObject(node)) continue;
+          // The editor hides other pages with display:none; inspect author-side
+          // visibility only within each page so their styles remain available.
+          let shown = true;
+          for (let ancestor = node; ancestor && ancestor !== page; ancestor = ancestor.parentElement) {
+            const style = getComputedStyle(ancestor);
+            if (style.display === 'none' || style.visibility !== 'visible' || style.opacity === '0' || style.contentVisibility === 'hidden') {
+              shown = false;
+              break;
+            }
+          }
+          if (!shown) continue;
+          const computed = getComputedStyle(node), size = parseFloat(computed.fontSize);
+          if (!Number.isFinite(size) || size < 6) continue;
+          const values = Object.fromEntries(textStyleProps.map(prop => [prop, computed.getPropertyValue(prop)]));
+          const key = JSON.stringify(textStyleProps.filter(prop => prop !== 'color').map(prop => values[prop]));
+          if (seen.has(key)) continue;
+          seen.add(key);
+          styles.push({ label: describeTextStyle(values), size, values });
+        }
       }
       styles.sort((a, b) => b.size - a.size);
-      if (styles.length) return styles.slice(0, 4);
+      if (styles.length) return styles;
       const scale = Math.min(1.25, board.clientWidth / 1280);
       const base = getComputedStyle(board);
       return [['大标题',64,48,700,'1.1'],['小标题',36,30,600,'1.25'],['正文',22,20,400,'1.5']].map(([name,size,min,weight,line]) => {
@@ -1219,7 +1234,7 @@ import {
         preview.style.fontSize = `${Math.min(27, Math.max(13, style.size / 2))}px`;
         preview.style.fontWeight = style.values['font-weight'];
         preview.style.fontStyle = style.values['font-style'] || 'normal';
-        preview.style.color = style.values.color;
+        preview.style.color = '#111';
         description.className = 'style-description'; description.textContent = style.label;
         item.append(preview, description);
         return item;
@@ -1469,8 +1484,6 @@ import {
       alignButton.setAttribute("aria-label", `文字对齐：${alignButton.title}`);
       const color = getComputedStyle(el.contains(at) ? at : el).color;
       $(".color-swatch").style.background = color;
-      const rgb = color.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
-      if (rgb && ui.activeElement !== $(".cpick")) $(".cpick").value = "#" + rgb.slice(1).map(n => Number(n).toString(16).padStart(2,"0")).join("");
     }
     function placeTbar() {
       const el = S.sel,
@@ -1539,7 +1552,6 @@ import {
         layoutTimer = setTimeout(refreshTextLayout, 100);
       }
     }
-    $(".cpick").addEventListener("input", e => fmt("color", e.target.value));
     $(".fs").addEventListener("change", (e) => {
       if (Number.isFinite(e.target.valueAsNumber))
         fmt("size", e.target.valueAsNumber);
@@ -1862,6 +1874,12 @@ import {
     );
 
     addEventListener('copy',e=>{if(!crop.active)transfer.copyEvent(e);},true);
+    addEventListener('cut',e=>{
+      if (!crop.active && transfer.cutEvent(e)) {
+        removeEl(S.sel);
+        toast('已剪切元素 · 可撤销');
+      }
+    },true);
     addEventListener('paste',e=>{if(!crop.active)transfer.pasteEvent(e);},true);
     addEventListener(
       "paste",
@@ -1948,6 +1966,107 @@ import {
       panel.style.top =
         Math.max(8, Math.min(innerHeight - panel.offsetHeight - 8, y)) + "px";
     }
+    let colorTarget = null;
+    let customColor = { h: 0, s: 1, v: 1 };
+    function paletteColor() {
+      if (colorTarget === 'text') {
+        const anchor = S.range?.startContainer || getSelection().anchorNode;
+        const at = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+        return hexColor(getComputedStyle(at && S.sel.contains(at) ? at : S.sel).color) || '#111111';
+      }
+      const prop = colorTarget === 'fill' ? 'shapeFill' : 'shapeStroke';
+      return hexColor(S.sel?.dataset[prop]) || '#111111';
+    }
+    function colorButton(color, selected) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'palette-swatch';
+      button.dataset.paletteColor = color;
+      button.setAttribute('aria-label', color);
+      button.setAttribute('aria-pressed', String(color === selected));
+      button.title = color;
+      button.style.background = color;
+      return button;
+    }
+    function renderColorPalette() {
+      const selected = paletteColor();
+      const current = $('.palette-current');
+      current.replaceChildren();
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'palette-swatch palette-add';
+      add.dataset.paletteCustom = '';
+      add.title = '自定义颜色';
+      add.setAttribute('aria-label', '自定义颜色');
+      add.innerHTML = icon('Plus');
+      current.append(add);
+      documentColors(boards()).forEach(color => current.append(colorButton(color, selected)));
+      const recommended = $('.palette-recommended');
+      recommended.replaceChildren();
+      recommendedColors.flat().forEach(color => recommended.append(colorButton(color, selected)));
+      $('.palette-main').hidden = false;
+      $('.palette-custom').hidden = true;
+    }
+    function openColors(target, button) {
+      if (!canMutate() || !S.sel) return;
+      colorTarget = target;
+      renderColorPalette();
+      openMenu('colors', button);
+    }
+    function applyColor(color) {
+      if (!canMutate() || !S.sel || !colorTarget) return;
+      if (colorTarget === 'text') fmt('color', color);
+      else {
+        const input = $(`[data-shape-prop=${colorTarget}]`);
+        input.value = color;
+        previewShapeParam(input);
+        finishShapeParam(input);
+      }
+      closeMenus();
+    }
+    function syncCustomColor() {
+      const color = hsvToHex(customColor.h, customColor.s, customColor.v);
+      $('.palette-hex').value = color;
+      $('.palette-hex-error').hidden = true;
+      $('.palette-sv').style.setProperty('--palette-hue', `hsl(${customColor.h} 100% 50%)`);
+      $('.palette-cursor').style.left = `${customColor.s * 100}%`;
+      $('.palette-cursor').style.top = `${(1 - customColor.v) * 100}%`;
+      $('.palette-hue').value = String(customColor.h);
+      $('.palette-sv').setAttribute('aria-valuenow', String(Math.round(customColor.v * 100)));
+    }
+    function customFromPoint(event) {
+      const square = $('.palette-sv'), r = square.getBoundingClientRect();
+      customColor.s = Math.max(0, Math.min(1, (event.clientX - r.left) / r.width));
+      customColor.v = 1 - Math.max(0, Math.min(1, (event.clientY - r.top) / r.height));
+      syncCustomColor();
+    }
+    $('.palette-sv').addEventListener('pointerdown', event => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      customFromPoint(event);
+    });
+    $('.palette-sv').addEventListener('pointermove', event => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) customFromPoint(event);
+    });
+    $('.palette-sv').addEventListener('keydown', event => {
+      const step = event.shiftKey ? .1 : .02;
+      if (event.key === 'ArrowLeft') customColor.s = Math.max(0, customColor.s - step);
+      else if (event.key === 'ArrowRight') customColor.s = Math.min(1, customColor.s + step);
+      else if (event.key === 'ArrowUp') customColor.v = Math.min(1, customColor.v + step);
+      else if (event.key === 'ArrowDown') customColor.v = Math.max(0, customColor.v - step);
+      else return;
+      event.preventDefault();
+      syncCustomColor();
+    });
+    $('.palette-hue').addEventListener('input', event => { customColor.h = Number(event.target.value); syncCustomColor(); });
+    $('.palette-hex').addEventListener('input', event => { $('.palette-hex-error').hidden = true; const color = hexColor(event.target.value); if (color) { customColor = hexToHsv(color); syncCustomColor(); } });
+    $('.palette-hex-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const value = $('.palette-hex').value.trim();
+      const color = /^#?[0-9a-f]{6}$/i.test(value) ? hexColor(value.startsWith('#') ? value : `#${value}`) : null;
+      if (!color) { $('.palette-hex-error').hidden = false; return; }
+      applyColor(color);
+    });
     function imageFit(value) { crop.finish(); crop.reset(S.sel, value); }
     function layer(front) {
       const el = S.sel;
@@ -2097,11 +2216,16 @@ import {
       ungroup: ungroupSelection,
       "group-enter": () => enterGroup(S.sel),
       "group-exit": exitGroup,
+      "element-copy": () => { if (S.sel && !document.execCommand('copy')) toast('无法写入剪贴板，请使用复制快捷键'); },
+      "element-cut": () => { if (S.sel && !document.execCommand('cut')) toast('无法写入剪贴板，请使用剪切快捷键'); },
       "element-duplicate": () => S.sel && duplicate(S.sel),
       "element-delete": () => S.sel && removeEl(S.sel),
       "element-front": () => layer(true),
       "element-back": () => layer(false),
       source: openSource,
+      'text-color': btn => openColors('text', btn),
+      'shape-fill-color': btn => openColors('fill', btn),
+      'shape-stroke-color': btn => openColors('stroke', btn),
       export: (btn) => openMenu("export", btn),
       more: (btn) => openMenu("more", btn),
       status: (btn) => openMenu("status", btn),
@@ -2167,7 +2291,7 @@ import {
       "text-fit",
       "text-align",
       "group", "ungroup", "group-enter", "group-exit", "select-all",
-      "element-duplicate",
+      "element-copy", "element-cut", "element-duplicate",
       "element-delete",
       "element-front",
       "element-back",
@@ -2185,6 +2309,21 @@ import {
     ui.addEventListener("click", (e) => {
       const btn = e.target.closest("button");
       if (!btn || btn.disabled) return;
+      if (btn.dataset.paletteColor) { applyColor(btn.dataset.paletteColor); return; }
+      if (btn.hasAttribute('data-palette-custom')) {
+        customColor = hexToHsv(paletteColor());
+        syncCustomColor();
+        $('.palette-main').hidden = true;
+        $('.palette-custom').hidden = false;
+        $('.palette-hex').focus();
+        $('.palette-hex').select();
+        return;
+      }
+      if (btn.classList.contains('palette-back')) {
+        $('.palette-main').hidden = false;
+        $('.palette-custom').hidden = true;
+        return;
+      }
       if (btn.dataset.fmt) {
         if (persistence?.canEdit() && S.editing)
           fmt(btn.dataset.fmt, btn.dataset.v);
@@ -2193,7 +2332,7 @@ import {
       const act = btn.dataset.act;
       if (!act) return;
       if (
-        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape", "add-text"].includes(act)
+        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape", "add-text", "text-color", "shape-fill-color", "shape-stroke-color"].includes(act)
       )
         closeMenus();
       runAction(act, btn);
@@ -2247,6 +2386,7 @@ import {
     });
     ui.addEventListener("keydown", (e) => {
       if (e.target.matches('.rotation-angle')) return;
+      if (e.target.matches('.palette-hue,.palette-hex,.palette-sv') && e.key.startsWith('Arrow')) return;
       if (!modal.hidden && e.key === "Tab") {
         const controls = [
             ...modal.querySelectorAll("button:not(:disabled),textarea"),
