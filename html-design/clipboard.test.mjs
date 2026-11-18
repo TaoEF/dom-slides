@@ -50,6 +50,98 @@ test('object clipboard pastes on the same page with new IDs and one undo step', 
   } finally { await c.close(); }
 });
 
+test('Cut removes selected objects once, restores them on Undo, and pastes on another page', async () => {
+  const c = await context(), p = await open(c);
+  try {
+    await p.locator('[data-el=shape]').click();
+    await p.locator('[data-el=image]').click({ modifiers: ['Shift'] });
+    await p.keyboard.press('ControlOrMeta+X');
+    assert.equal(await p.locator('[data-artboard=p1] [data-el]').count(), 1);
+    assert.match(await p.locator('.toast').textContent(), /已剪切元素/);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('[data-artboard=p1] [data-el]').count(), 3);
+    await p.locator('[data-act=redo]').click();
+    assert.equal(await p.locator('[data-artboard=p1] [data-el]').count(), 1);
+    await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    await p.keyboard.press('ControlOrMeta+V');
+    assert.equal(await p.locator('[data-artboard=p2] [data-el]').count(), 3);
+    assert.equal(await p.locator('[data-artboard=p2] svg[data-shape=triangle]').count(), 1);
+    assert.equal(await p.locator('[data-artboard=p2] img').getAttribute('src'), image);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('[data-artboard=p2] [data-el]').count(), 1);
+    assert.deepEqual(p.errors, []);
+  } finally { await c.close(); }
+});
+
+test('context menu Copy and Cut use the clipboard; duplicate remains in place', async () => {
+  const c = await context(), p = await open(c);
+  const menu = async action => {
+    await p.locator('[data-act=element-more]').click();
+    await p.locator(`[data-menu=element] [data-act=${action}]`).click();
+  };
+  try {
+    await p.locator('[data-el=title]').click();
+    await menu('element-copy');
+    assert.equal(await p.locator('[data-artboard=p1] h1[data-el]').count(), 1);
+    await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    await p.keyboard.press('ControlOrMeta+V');
+    assert.equal(await p.locator('[data-artboard=p2] h1[data-el]').count(), 2);
+    await p.locator('.thumb[data-page-id=p1] .thumb-main').click();
+    await p.locator('[data-el=title]').click();
+    await menu('element-cut');
+    assert.equal(await p.locator('[data-artboard=p1] h1[data-el]').count(), 0);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('[data-artboard=p1] h1[data-el]').count(), 1);
+    await p.locator('[data-el=title]').click();
+    await menu('element-duplicate');
+    assert.equal(await p.locator('[data-artboard=p1] h1[data-el]').count(), 2);
+    assert.deepEqual(p.errors, []);
+  } finally { await c.close(); }
+});
+
+test('right click exposes Cut and a cut object pastes into another tab', async () => {
+  const c = await context(), source = await open(c), target = await open(c);
+  try {
+    await source.locator('[data-el=image]').click({ button: 'right' });
+    assert.equal(await source.locator('[data-menu=element]').isVisible(), true);
+    assert.equal(await source.locator('[data-menu=element] [data-act=element-cut]').isVisible(), true);
+    await source.locator('[data-menu=element] [data-act=element-cut]').click();
+    assert.equal(await source.locator('[data-artboard=p1] img[data-el]').count(), 0);
+    await target.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    await target.keyboard.press('ControlOrMeta+V');
+    assert.equal(await target.locator('[data-artboard=p2] img[data-el]').count(), 1);
+    assert.equal(await target.locator('[data-artboard=p2] img').getAttribute('src'), image);
+    await source.locator('[data-act=undo]').click();
+    assert.equal(await source.locator('[data-artboard=p1] img[data-el]').count(), 1);
+    assert.deepEqual(source.errors, []);
+    assert.deepEqual(target.errors, []);
+  } finally { await c.close(); }
+});
+
+test('failed Cut keeps the source; native text input still cuts its own text', async () => {
+  const c = await context(), p = await open(c);
+  try {
+    await p.locator('[data-artboard=p1]').evaluate((board, src) => {
+      board.insertAdjacentHTML('beforeend', `<picture><source srcset="${src}"><img data-el="picture-image" src="${src}" alt="picture"></picture>`);
+    }, image);
+    await p.locator('[data-el=picture-image]').click();
+    await p.keyboard.press('ControlOrMeta+X');
+    assert.equal(await p.locator('[data-el=picture-image]').count(), 1);
+    assert.match(await p.locator('.toast').textContent(), /暂不能单独跨页复制/);
+    const input = p.locator('#native-input');
+    await input.focus();
+    await input.press('ControlOrMeta+A');
+    await input.press('ControlOrMeta+X');
+    assert.equal(await input.inputValue(), '');
+    assert.equal(await p.locator('[data-artboard=p1] [data-el]').count(), 4);
+    await p.locator('[data-el=title]').dblclick();
+    await p.keyboard.press('ControlOrMeta+A');
+    await p.keyboard.press('ControlOrMeta+X');
+    assert.equal(await p.locator('[data-el=title]').count(), 1);
+    assert.deepEqual(p.errors, []);
+  } finally { await c.close(); }
+});
+
 test('pasted text remains editable by double click', async () => {
   const c = await context(), p = await open(c);
   try {

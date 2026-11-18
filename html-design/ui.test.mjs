@@ -706,13 +706,16 @@ test('text selection has width handles and one scale corner; insert menu reuses 
     assert.equal(await p.locator('[data-menu=text-styles] .style-swatch').count(), 0);
     assert.equal(await p.locator('[data-menu=text-styles] .style-preview').first().evaluate(node => getComputedStyle(node).fontSize), '27px');
     assert.doesNotMatch((await p.locator('[data-menu=text-styles]').textContent()), /Scalesmall text/);
-    await p.locator('[data-menu=text-styles] button').click();
+    await p.locator('[data-menu=text-styles] button').first().click();
     const inserted = p.locator('[data-artboard=p1] [data-el^=p1-text-]');
     assert.equal(await inserted.evaluate(node => getComputedStyle(node).fontSize), '64px');
     await p.keyboard.type('New title');
     assert.match(await inserted.textContent(), /New title/);
     await p.keyboard.press('Escape');
-    await p.locator('[data-artboard=p2]').evaluate(board => board.querySelector('[data-el]').remove());
+    await p.locator('[data-stage]').evaluate(stage => {
+      for (const node of stage.querySelectorAll('[data-el]'))
+        if (!node.matches('img,svg') && !node.querySelector('[data-el],img,svg')) node.remove();
+    });
     await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
     await p.locator('[data-act=add-text]').click();
     const defaults = await p.locator('[data-menu=text-styles] .style-description').allTextContents();
@@ -724,24 +727,63 @@ test('text selection has width handles and one scale corner; insert menu reuses 
   } finally { await p.close(); }
 });
 
-test('text style menu keeps four largest distinct styles on the current page', async () => {
+test('text style menu scans all pages, deduplicates typography, and scrolls with black previews', async () => {
   const p = await open();
   try {
-    await p.locator('[data-artboard=p1]').evaluate(board => {
-      for (const [index, size] of [44,72,52,18,44].entries()) {
+    await p.locator('[data-artboard=p2]').evaluate(board => {
+      for (const [index, size] of [86,72,52,44,44,18,...Array.from({length:18},(_,i)=>20+i)].entries()) {
         const node = document.createElement('p');
         node.dataset.el = `extra-${index}`;
         node.textContent = `Sample ${index}`;
-        node.style.cssText = `position:absolute;left:450px;top:${30 + index * 45}px;font-size:${size}px`;
+        node.style.cssText = `position:absolute;left:450px;top:${30 + index * 25}px;font-size:${size}px;color:${index===0?'white':'black'}`;
         board.append(node);
       }
+      const hidden = document.createElement('p');
+      hidden.dataset.el = 'hidden-style'; hidden.textContent = 'Hidden';
+      hidden.style.cssText = 'display:none;font-size:200px'; board.append(hidden);
     });
     await p.locator('[data-act=add-text]').click();
     const items = p.locator('[data-menu=text-styles] button');
-    assert.equal(await items.count(), 4);
+    assert.ok(await items.count() > 20);
     const descriptions = await p.locator('[data-menu=text-styles] .style-description').allTextContents();
-    assert.deepEqual(descriptions.map(item => item.match(/\d+(?:\.\d+)?px/)?.[0]), ['72px','64px','52px','44px']);
+    const sizes = descriptions.map(item => Number(item.match(/(\d+(?:\.\d+)?)px/)?.[1]));
+    assert.equal(sizes[0], 86, 'a hidden page contributes the largest visible style');
+    assert.ok(sizes.every((size,i) => i===0 || sizes[i-1]>=size));
+    assert.equal(sizes.filter(size => size===44).length, 1, 'same typography with different text colors is one choice');
+    assert.ok(!sizes.includes(200), 'author-hidden text is excluded');
+    assert.equal(await p.locator('[data-menu=text-styles] .style-preview').first().evaluate(node => getComputedStyle(node).color), 'rgb(17, 17, 17)');
+    assert.equal(await p.locator('[data-menu=text-styles]').evaluate(node => node.scrollHeight > node.clientHeight), true);
     assert.ok(descriptions.every(item => !/Sample|Scalesmall/.test(item)));
+    await items.last().click();
+    const inserted = p.locator('[data-artboard=p1] [data-el^=p1-text-]');
+    assert.equal(await inserted.count(), 1, 'a scrolled choice inserts editable text on the current page');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('color palette finds colors on other pages and applies them to selected text with undo', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p2] [data-el=p2-title]').evaluate(node => { node.style.color = '#d14a2a'; });
+    await p.locator('[data-el=p1-title]').click();
+    await p.locator('[data-act=text-color]').click();
+    assert.equal(await p.locator('[data-menu=colors] input[type=color]').count(), 0, 'the palette has no native RGB dialog');
+    assert.equal(await p.locator('[data-menu=colors] [data-palette-color="#D14A2A"]').count(), 1, 'a hidden page contributes its text color');
+    assert.equal(await p.locator('.palette-recommended .palette-swatch').count(), 63);
+    await p.locator('[data-menu=colors] [data-palette-color="#D14A2A"]').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(209, 74, 42)')), true);
+    await p.keyboard.press('Escape');
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(209, 74, 42)')), false);
+    await p.locator('[data-el=p1-title]').click();
+    await p.locator('[data-act=text-color]').click();
+    await p.locator('[data-palette-custom]').click();
+    await p.locator('.palette-hex').fill('invalid');
+    await p.locator('.palette-hex-form button').click();
+    assert.equal(await p.locator('.palette-hex-error').isVisible(), true);
+    await p.locator('.palette-hex').fill('#2c65bd');
+    await p.locator('.palette-hex-form button').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(44, 101, 189)')), true);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
@@ -803,7 +845,7 @@ test("text alignment cycles with one click and adaptation stays in the element m
       assert.equal(await p.locator('[data-act=text-align]').getAttribute('data-align'), align);
     }
     assert.equal(await p.locator('.color-control svg').count(), 0);
-    assert.equal(await p.locator('.cpick').getAttribute('type'), 'color');
+    assert.equal(await p.locator('[data-act=text-color]').getAttribute('aria-haspopup'), 'dialog');
     assert.equal(await p.locator('.color-swatch').evaluate(n => getComputedStyle(n).borderRadius), '50%');
     await p.locator('[data-act=element-more]').click();
     assert.ok(await p.locator('[data-act=text-layout]').isVisible());
@@ -835,11 +877,11 @@ test("keyboard adaptation opens with useful focus and image menus skip hidden te
     await p.keyboard.press('Enter');
     const imageActions = await p.locator('[data-menu=element] button').evaluateAll(nodes =>
       nodes.filter(n => !n.disabled && n.getClientRects().length).map(n => n.dataset.act));
-    assert.deepEqual(imageActions, ['select-all', 'element-duplicate', 'element-front', 'element-back', 'element-delete']);
+    assert.deepEqual(imageActions, ['select-all', 'element-copy', 'element-cut', 'element-duplicate', 'element-front', 'element-back', 'element-delete']);
     await p.keyboard.press('ArrowDown');
     assert.equal(await focused(), 'select-all', 'the new visible action precedes duplicate; hidden text/group actions are skipped');
     await p.keyboard.press('ArrowDown');
-    assert.equal(await focused(), 'element-duplicate');
+    assert.equal(await focused(), 'element-copy');
     await p.keyboard.press('ArrowUp');
     assert.equal(await focused(), 'select-all');
     await p.keyboard.press('Escape');
