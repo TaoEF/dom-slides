@@ -761,6 +761,33 @@ test('text style menu scans all pages, deduplicates typography, and scrolls with
   } finally { await p.close(); }
 });
 
+test('color palette finds colors on other pages and applies them to selected text with undo', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p2] [data-el=p2-title]').evaluate(node => { node.style.color = '#d14a2a'; });
+    await p.locator('[data-el=p1-title]').click();
+    await p.locator('[data-act=text-color]').click();
+    assert.equal(await p.locator('[data-menu=colors] input[type=color]').count(), 0, 'the palette has no native RGB dialog');
+    assert.equal(await p.locator('[data-menu=colors] [data-palette-color="#D14A2A"]').count(), 1, 'a hidden page contributes its text color');
+    assert.equal(await p.locator('.palette-recommended .palette-swatch').count(), 63);
+    await p.locator('[data-menu=colors] [data-palette-color="#D14A2A"]').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(209, 74, 42)')), true);
+    await p.keyboard.press('Escape');
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(209, 74, 42)')), false);
+    await p.locator('[data-el=p1-title]').click();
+    await p.locator('[data-act=text-color]').click();
+    await p.locator('[data-palette-custom]').click();
+    await p.locator('.palette-hex').fill('invalid');
+    await p.locator('.palette-hex-form button').click();
+    assert.equal(await p.locator('.palette-hex-error').isVisible(), true);
+    await p.locator('.palette-hex').fill('#2c65bd');
+    await p.locator('.palette-hex-form button').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(44, 101, 189)')), true);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test('an emptied text box keeps its three handles and font scaling', async () => {
   const p = await open();
   try {
@@ -818,7 +845,7 @@ test("text alignment cycles with one click and adaptation stays in the element m
       assert.equal(await p.locator('[data-act=text-align]').getAttribute('data-align'), align);
     }
     assert.equal(await p.locator('.color-control svg').count(), 0);
-    assert.equal(await p.locator('.cpick').getAttribute('type'), 'color');
+    assert.equal(await p.locator('[data-act=text-color]').getAttribute('aria-haspopup'), 'dialog');
     assert.equal(await p.locator('.color-swatch').evaluate(n => getComputedStyle(n).borderRadius), '50%');
     await p.locator('[data-act=element-more]').click();
     assert.ok(await p.locator('[data-act=text-layout]').isVisible());

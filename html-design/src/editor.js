@@ -13,6 +13,7 @@ import { createPages } from "./pages.js";
 import { textMetrics, scaleText } from "./typography.js";
 import { createTextLayout } from "./text-layout.js";
 import { icon } from "./icons.js";
+import { documentColors, hexColor, hexToHsv, hsvToHex, recommendedColors } from './colors.js';
 import { makeShape, renderShape, shapeHasFill, shapeHasAdjust, shapeHasRadius } from './shapes.js';
 import { rekeyDOMIds } from "./identifiers.js";
 import { createGuides } from "./guides.js";
@@ -1482,8 +1483,6 @@ import {
       alignButton.setAttribute("aria-label", `文字对齐：${alignButton.title}`);
       const color = getComputedStyle(el.contains(at) ? at : el).color;
       $(".color-swatch").style.background = color;
-      const rgb = color.match(/^rgb\((\d+), (\d+), (\d+)\)$/);
-      if (rgb && ui.activeElement !== $(".cpick")) $(".cpick").value = "#" + rgb.slice(1).map(n => Number(n).toString(16).padStart(2,"0")).join("");
     }
     function placeTbar() {
       const el = S.sel,
@@ -1552,7 +1551,6 @@ import {
         layoutTimer = setTimeout(refreshTextLayout, 100);
       }
     }
-    $(".cpick").addEventListener("input", e => fmt("color", e.target.value));
     $(".fs").addEventListener("change", (e) => {
       if (Number.isFinite(e.target.valueAsNumber))
         fmt("size", e.target.valueAsNumber);
@@ -1967,6 +1965,107 @@ import {
       panel.style.top =
         Math.max(8, Math.min(innerHeight - panel.offsetHeight - 8, y)) + "px";
     }
+    let colorTarget = null;
+    let customColor = { h: 0, s: 1, v: 1 };
+    function paletteColor() {
+      if (colorTarget === 'text') {
+        const anchor = S.range?.startContainer || getSelection().anchorNode;
+        const at = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+        return hexColor(getComputedStyle(at && S.sel.contains(at) ? at : S.sel).color) || '#111111';
+      }
+      const prop = colorTarget === 'fill' ? 'shapeFill' : 'shapeStroke';
+      return hexColor(S.sel?.dataset[prop]) || '#111111';
+    }
+    function colorButton(color, selected) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'palette-swatch';
+      button.dataset.paletteColor = color;
+      button.setAttribute('aria-label', color);
+      button.setAttribute('aria-pressed', String(color === selected));
+      button.title = color;
+      button.style.background = color;
+      return button;
+    }
+    function renderColorPalette() {
+      const selected = paletteColor();
+      const current = $('.palette-current');
+      current.replaceChildren();
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.className = 'palette-swatch palette-add';
+      add.dataset.paletteCustom = '';
+      add.title = '自定义颜色';
+      add.setAttribute('aria-label', '自定义颜色');
+      add.innerHTML = icon('Plus');
+      current.append(add);
+      documentColors(boards()).forEach(color => current.append(colorButton(color, selected)));
+      const recommended = $('.palette-recommended');
+      recommended.replaceChildren();
+      recommendedColors.flat().forEach(color => recommended.append(colorButton(color, selected)));
+      $('.palette-main').hidden = false;
+      $('.palette-custom').hidden = true;
+    }
+    function openColors(target, button) {
+      if (!canMutate() || !S.sel) return;
+      colorTarget = target;
+      renderColorPalette();
+      openMenu('colors', button);
+    }
+    function applyColor(color) {
+      if (!canMutate() || !S.sel || !colorTarget) return;
+      if (colorTarget === 'text') fmt('color', color);
+      else {
+        const input = $(`[data-shape-prop=${colorTarget}]`);
+        input.value = color;
+        previewShapeParam(input);
+        finishShapeParam(input);
+      }
+      closeMenus();
+    }
+    function syncCustomColor() {
+      const color = hsvToHex(customColor.h, customColor.s, customColor.v);
+      $('.palette-hex').value = color;
+      $('.palette-hex-error').hidden = true;
+      $('.palette-sv').style.setProperty('--palette-hue', `hsl(${customColor.h} 100% 50%)`);
+      $('.palette-cursor').style.left = `${customColor.s * 100}%`;
+      $('.palette-cursor').style.top = `${(1 - customColor.v) * 100}%`;
+      $('.palette-hue').value = String(customColor.h);
+      $('.palette-sv').setAttribute('aria-valuenow', String(Math.round(customColor.v * 100)));
+    }
+    function customFromPoint(event) {
+      const square = $('.palette-sv'), r = square.getBoundingClientRect();
+      customColor.s = Math.max(0, Math.min(1, (event.clientX - r.left) / r.width));
+      customColor.v = 1 - Math.max(0, Math.min(1, (event.clientY - r.top) / r.height));
+      syncCustomColor();
+    }
+    $('.palette-sv').addEventListener('pointerdown', event => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      customFromPoint(event);
+    });
+    $('.palette-sv').addEventListener('pointermove', event => {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) customFromPoint(event);
+    });
+    $('.palette-sv').addEventListener('keydown', event => {
+      const step = event.shiftKey ? .1 : .02;
+      if (event.key === 'ArrowLeft') customColor.s = Math.max(0, customColor.s - step);
+      else if (event.key === 'ArrowRight') customColor.s = Math.min(1, customColor.s + step);
+      else if (event.key === 'ArrowUp') customColor.v = Math.min(1, customColor.v + step);
+      else if (event.key === 'ArrowDown') customColor.v = Math.max(0, customColor.v - step);
+      else return;
+      event.preventDefault();
+      syncCustomColor();
+    });
+    $('.palette-hue').addEventListener('input', event => { customColor.h = Number(event.target.value); syncCustomColor(); });
+    $('.palette-hex').addEventListener('input', event => { $('.palette-hex-error').hidden = true; const color = hexColor(event.target.value); if (color) { customColor = hexToHsv(color); syncCustomColor(); } });
+    $('.palette-hex-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const value = $('.palette-hex').value.trim();
+      const color = /^#?[0-9a-f]{6}$/i.test(value) ? hexColor(value.startsWith('#') ? value : `#${value}`) : null;
+      if (!color) { $('.palette-hex-error').hidden = false; return; }
+      applyColor(color);
+    });
     function imageFit(value) { crop.finish(); crop.reset(S.sel, value); }
     function layer(front) {
       const el = S.sel;
@@ -2123,6 +2222,9 @@ import {
       "element-front": () => layer(true),
       "element-back": () => layer(false),
       source: openSource,
+      'text-color': btn => openColors('text', btn),
+      'shape-fill-color': btn => openColors('fill', btn),
+      'shape-stroke-color': btn => openColors('stroke', btn),
       export: (btn) => openMenu("export", btn),
       more: (btn) => openMenu("more", btn),
       status: (btn) => openMenu("status", btn),
@@ -2206,6 +2308,21 @@ import {
     ui.addEventListener("click", (e) => {
       const btn = e.target.closest("button");
       if (!btn || btn.disabled) return;
+      if (btn.dataset.paletteColor) { applyColor(btn.dataset.paletteColor); return; }
+      if (btn.hasAttribute('data-palette-custom')) {
+        customColor = hexToHsv(paletteColor());
+        syncCustomColor();
+        $('.palette-main').hidden = true;
+        $('.palette-custom').hidden = false;
+        $('.palette-hex').focus();
+        $('.palette-hex').select();
+        return;
+      }
+      if (btn.classList.contains('palette-back')) {
+        $('.palette-main').hidden = false;
+        $('.palette-custom').hidden = true;
+        return;
+      }
       if (btn.dataset.fmt) {
         if (persistence?.canEdit() && S.editing)
           fmt(btn.dataset.fmt, btn.dataset.v);
@@ -2214,7 +2331,7 @@ import {
       const act = btn.dataset.act;
       if (!act) return;
       if (
-        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape", "add-text"].includes(act)
+        !["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape", "add-text", "text-color", "shape-fill-color", "shape-stroke-color"].includes(act)
       )
         closeMenus();
       runAction(act, btn);
@@ -2268,6 +2385,7 @@ import {
     });
     ui.addEventListener("keydown", (e) => {
       if (e.target.matches('.rotation-angle')) return;
+      if (e.target.matches('.palette-hue,.palette-hex,.palette-sv') && e.key.startsWith('Arrow')) return;
       if (!modal.hidden && e.key === "Tab") {
         const controls = [
             ...modal.querySelectorAll("button:not(:disabled),textarea"),
