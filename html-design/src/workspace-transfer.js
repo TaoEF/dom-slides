@@ -484,8 +484,8 @@ export function createWorkspaceTransfer({
       node.style.top = `${g.cy - g.h / 2}px`;
     });
   }
-  function copyEvent(event) {
-    if (!canEdit() || !S.selection.length || S.text || editableTarget(event)) return false;
+  function copyEvent(event, { cut = false } = {}) {
+    if (!canEdit() || (cut && !S.editing) || !S.selection.length || S.text || editableTarget(event)) return false;
     try {
       const packet = capture(S.selection, { clipboard: true });
       const data = JSON.stringify({
@@ -509,7 +509,7 @@ export function createWorkspaceTransfer({
       );
       event.preventDefault();
       event.stopImmediatePropagation();
-      toast("已复制元素 · 可粘贴到其他页面或标签页");
+      if (!cut) toast("已复制元素 · 可粘贴到其他页面或标签页");
       return true;
     } catch (error) {
       // A failed second copy must replace the previous object packet too.
@@ -609,5 +609,6 @@ export function createWorkspaceTransfer({
     }
     return true;
   }
-  return { enabled, begin, move, drop, clear, copyEvent, pasteEvent };
+  const cutEvent = event => copyEvent(event, { cut: true });
+  return { enabled, begin, move, drop, clear, copyEvent, cutEvent, pasteEvent };
 }

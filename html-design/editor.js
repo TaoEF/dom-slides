@@ -1014,8 +1014,8 @@ property of their respective owners.
         node.style.top = `${g.cy - g.h / 2}px`;
       });
     }
-    function copyEvent(event) {
-      if (!canEdit() || !S.selection.length || S.text || editableTarget(event)) return false;
+    function copyEvent(event, { cut = false } = {}) {
+      if (!canEdit() || cut && !S.editing || !S.selection.length || S.text || editableTarget(event)) return false;
       try {
         const packet = capture(S.selection, { clipboard: true });
         const data = JSON.stringify({
@@ -1043,7 +1043,7 @@ property of their respective owners.
         );
         event.preventDefault();
         event.stopImmediatePropagation();
-        toast("已复制元素 · 可粘贴到其他页面或标签页");
+        if (!cut) toast("已复制元素 · 可粘贴到其他页面或标签页");
         return true;
       } catch (error) {
         event.clipboardData?.setData(CLIPBOARD_TYPE, JSON.stringify({
@@ -1137,7 +1137,8 @@ property of their respective owners.
       }
       return true;
     }
-    return { enabled, begin, move, drop, clear, copyEvent, pasteEvent };
+    const cutEvent = (event) => copyEvent(event, { cut: true });
+    return { enabled, begin, move, drop, clear, copyEvent, cutEvent, pasteEvent };
   }
 
   // html-design/src/painted-container.js
@@ -1612,6 +1613,7 @@ property of their respective owners.
       redo: chord("Z", true),
       "element-duplicate": chord("D"),
       "object-copy": chord("C"),
+      "object-cut": chord("X"),
       "object-paste": chord("V"),
       save: chord("S"),
       "zoom-in": chord("+"),
@@ -1627,91 +1629,99 @@ property of their respective owners.
   // html-design/src/editor.css
   var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-main:hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.thumb-main:focus-visible .frame {\n  outline: 2px solid var(--selection);\n  outline-offset: 3px;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch, .tbar .color-control .shape-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.text-tools .number-stepper { width: 64px; }\n.text-tools .number-stepper input { width: 47px; font-size: 14px; }\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; }\n.color-control:hover { background:var(--hover); }\n.color-control input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }\n.color-control .color-swatch, .color-control .shape-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap:0; width:36px; }\n.add-text .icon:first-child { width:17px; height:17px; }\n.add-text .icon:last-child { width:10px; height:10px; }\n.text-style-palette { width:245px; }\n.text-style-palette button { display:flex; justify-content:flex-start; width:100%; height:44px; gap:8px; padding:0 9px; text-align:left; }\n.text-style-palette .style-preview { flex:none; display:block; width:46px; overflow:hidden; text-align:center; line-height:1; }\n.text-style-palette .style-description { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }\n.add-shape { gap: 0; width: 36px; }\n.add-shape .icon:first-child { width: 17px; height: 17px; }\n.add-shape .icon:last-child { width: 10px; height: 10px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="se"]) { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.shape-palette { display: grid; grid-template-columns: repeat(4, 42px); gap: 4px; min-width: 0; padding: 8px; }\n.shape-palette[hidden] { display: none; }\n.shape-palette button { width: 42px; height: 42px; padding: 9px; justify-content: center; }\n.shape-palette svg { width: 24px; height: 24px; }\n.shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }\n.shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }\n.shape-stroke-color .shape-swatch { background: transparent; border: 3px solid currentColor; }\n.shape-width-control { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }\n.number-stepper { display: inline-flex; align-items: center; height: 29px; width: 52px; border-radius: 5px; background: #383838; }\n.number-stepper input { width: 35px; min-width: 0; height: 27px; border: 0; padding: 0 2px; outline: 0; background: transparent; color: #fff; text-align: center; appearance: textfield; font-variant-numeric: tabular-nums; }\n.number-stepper input::-webkit-inner-spin-button { appearance: none; }\n.number-steps { display: flex; flex-direction: column; width: 15px; height: 27px; }\n.number-steps button { width: 15px; min-width: 15px; height: 13px; min-height: 13px; padding: 0; border-radius: 2px; color: #c9c9cc; }\n.number-steps button .icon { width: 10px; height: 10px; }\n.shape-radius input, .shape-adjust input { width: 82px; accent-color: #c9c9cc; }\n.shape-more-section[hidden] { display: none; }\n.shape-more-section .shape-adjust { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; font-size: 12px; }\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n    gap: 2px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .tools { gap: 0; }\n  .head .layout-toggle { margin-inline: 0; }\n  .head .layout-toggle button { padding-inline: 3px; font-size: 10px; }\n  .head .tools > [data-act="add-text"],\n  .head .tools > [data-act="add-image"],\n  .head .tools > [data-act="add-shape"] { width: 27px; min-width: 27px; padding: 0; }\n  .head .add-shape .icon:last-child { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-scope { color:var(--muted); font-size:12px; padding:0 8px; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n\n.page-size-dialog{position:fixed;inset:0;z-index:2147483647;background:#0005;display:grid;place-items:center;padding:16px;color:#202020;font:13px/1.5 system-ui,sans-serif}\n.size-box{width:min(360px,100%);box-sizing:border-box;background:#fff;border-radius:12px;padding:22px}\n.size-heading,.size-fields,.size-actions{display:flex;align-items:center;gap:12px}.size-heading h2{font-size:17px;margin:0;flex:1}.size-close{padding:0;width:28px}.size-page{color:#646464;margin:4px 0 20px}.size-box label{display:block;flex:1;min-width:0}.size-box select,.size-box input{box-sizing:border-box;width:100%;margin:6px 0 16px;padding:9px 10px;background:#f2f2f2;border:0;border-radius:6px;color:#202020;font:inherit}.size-fields label{position:relative}.size-fields input{padding-right:30px}.size-fields span{position:absolute;right:10px;top:35px;color:#646464}.size-note{font-size:12px;color:#646464;margin:0 0 20px}.size-error{font-size:12px;color:#b42318}.size-actions{justify-content:flex-end}.size-actions button{padding-inline:14px}.size-box :focus-visible{outline:2px solid #258bff;outline-offset:2px}\n.workspace-switch{flex-shrink:0;margin-inline:auto;background:#e8e8e8}.workspace-switch button{font-size:12px;padding:4px 9px;min-width:0}.workspace-switch [aria-pressed=true]{background:#fff;color:#202020}.workspace-label{position:fixed;height:24px;min-height:24px;justify-content:flex-start;padding:0;background:transparent;font-size:11px;color:#646464;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:auto}.workspace-label:hover{background:transparent;color:#202020}.workspace-ghost{position:fixed;inset:0;pointer-events:none;z-index:2147483641}.workspace-ghost *{pointer-events:none!important}.workspace-labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}\n@media(max-width:760px){:host([data-workspace-enabled]) .page-title{display:none}:host([data-workspace-enabled]) .footer{gap:2px}:host([data-workspace-enabled]) .workspace-switch button{padding-inline:6px;font-size:11px}}\n';
 
-  // node_modules/lucide/dist/esm/icons/arrow-down.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/arrow-down.mjs
   var ArrowDown = [
     ["path", { d: "M12 5v14" }],
     ["path", { d: "m19 12-7 7-7-7" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/arrow-up.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/arrow-up.mjs
   var ArrowUp = [
     ["path", { d: "m5 12 7-7 7 7" }],
     ["path", { d: "M12 19V5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/bold.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/bold.mjs
   var Bold = [
     ["path", { d: "M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/bring-to-front.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/bring-to-front.mjs
   var BringToFront = [
     ["rect", { x: "8", y: "8", width: "8", height: "8", rx: "2" }],
     ["path", { d: "M4 10a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2" }],
     ["path", { d: "M14 20a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/check-check.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/check-check.mjs
   var CheckCheck = [
     ["path", { d: "M18 6 7 17l-5-5" }],
     ["path", { d: "m22 10-7.5 7.5L13 16" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/check.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/check.mjs
   var Check = [["path", { d: "M20 6 9 17l-5-5" }]];
 
-  // node_modules/lucide/dist/esm/icons/chevron-down.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/chevron-down.mjs
   var ChevronDown = [["path", { d: "m6 9 6 6 6-6" }]];
 
-  // node_modules/lucide/dist/esm/icons/chevron-left.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/chevron-left.mjs
   var ChevronLeft = [["path", { d: "m15 18-6-6 6-6" }]];
 
-  // node_modules/lucide/dist/esm/icons/chevron-right.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/chevron-right.mjs
   var ChevronRight = [["path", { d: "m9 18 6-6-6-6" }]];
 
-  // node_modules/lucide/dist/esm/icons/chevron-up.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/chevron-up.mjs
   var ChevronUp = [["path", { d: "m18 15-6-6-6 6" }]];
 
-  // node_modules/lucide/dist/esm/icons/circle-alert.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/circle-alert.mjs
   var CircleAlert = [
     ["circle", { cx: "12", cy: "12", r: "10" }],
     ["line", { x1: "12", x2: "12", y1: "8", y2: "12" }],
     ["line", { x1: "12", x2: "12.01", y1: "16", y2: "16" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/code.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/code.mjs
   var Code = [
     ["path", { d: "m16 18 6-6-6-6" }],
     ["path", { d: "m8 6-6 6 6 6" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/copy.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/copy-plus.mjs
+  var CopyPlus = [
+    ["line", { x1: "15", x2: "15", y1: "12", y2: "18" }],
+    ["line", { x1: "12", x2: "18", y1: "15", y2: "15" }],
+    ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2" }],
+    ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" }]
+  ];
+
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/copy.mjs
   var Copy = [
     ["rect", { width: "14", height: "14", x: "8", y: "8", rx: "2", ry: "2" }],
     ["path", { d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/crop.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/crop.mjs
   var Crop = [
     ["path", { d: "M6 2v14a2 2 0 0 0 2 2h14" }],
     ["path", { d: "M18 22V8a2 2 0 0 0-2-2H2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/download.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/download.mjs
   var Download = [
     ["path", { d: "M12 15V3" }],
     ["path", { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }],
     ["path", { d: "m7 10 5 5 5-5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/ellipsis.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/ellipsis.mjs
   var Ellipsis = [
     ["circle", { cx: "12", cy: "12", r: "1" }],
     ["circle", { cx: "19", cy: "12", r: "1" }],
     ["circle", { cx: "5", cy: "12", r: "1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/file-text.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/file-text.mjs
   var FileText = [
     [
       "path",
@@ -1725,7 +1735,7 @@ property of their respective owners.
     ["path", { d: "M16 17H8" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/grip-vertical.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/grip-vertical.mjs
   var GripVertical = [
     ["circle", { cx: "9", cy: "12", r: "1" }],
     ["circle", { cx: "9", cy: "5", r: "1" }],
@@ -1735,7 +1745,7 @@ property of their respective owners.
     ["circle", { cx: "15", cy: "19", r: "1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/group.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/group.mjs
   var Group = [
     ["path", { d: "M3 7V5c0-1.1.9-2 2-2h2" }],
     ["path", { d: "M17 3h2c1.1 0 2 .9 2 2v2" }],
@@ -1745,7 +1755,7 @@ property of their respective owners.
     ["rect", { width: "7", height: "5", x: "10", y: "12", rx: "1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/image-plus.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/image-plus.mjs
   var ImagePlus = [
     ["path", { d: "M16 5h6" }],
     ["path", { d: "M19 2v6" }],
@@ -1754,20 +1764,20 @@ property of their respective owners.
     ["circle", { cx: "9", cy: "9", r: "2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/italic.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/italic.mjs
   var Italic = [
     ["line", { x1: "19", x2: "10", y1: "4", y2: "4" }],
     ["line", { x1: "14", x2: "5", y1: "20", y2: "20" }],
     ["line", { x1: "15", x2: "9", y1: "4", y2: "20" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/lock.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/lock.mjs
   var Lock = [
     ["rect", { width: "18", height: "11", x: "3", y: "11", rx: "2", ry: "2" }],
     ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/maximize.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/maximize.mjs
   var Maximize = [
     ["path", { d: "M8 3H5a2 2 0 0 0-2 2v3" }],
     ["path", { d: "M21 8V5a2 2 0 0 0-2-2h-3" }],
@@ -1775,7 +1785,7 @@ property of their respective owners.
     ["path", { d: "M16 21h3a2 2 0 0 0 2-2v-3" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/minimize.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/minimize.mjs
   var Minimize = [
     ["path", { d: "M8 3v3a2 2 0 0 1-2 2H3" }],
     ["path", { d: "M21 8h-3a2 2 0 0 1-2-2V3" }],
@@ -1783,10 +1793,10 @@ property of their respective owners.
     ["path", { d: "M16 21v-3a2 2 0 0 1 2-2h3" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/minus.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/minus.mjs
   var Minus = [["path", { d: "M5 12h14" }]];
 
-  // node_modules/lucide/dist/esm/icons/mouse-pointer-2.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/mouse-pointer-2.mjs
   var MousePointer2 = [
     [
       "path",
@@ -1796,13 +1806,13 @@ property of their respective owners.
     ]
   ];
 
-  // node_modules/lucide/dist/esm/icons/panel-left.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/panel-left.mjs
   var PanelLeft = [
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
     ["path", { d: "M9 3v18" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/pencil.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/pencil.mjs
   var Pencil = [
     [
       "path",
@@ -1813,7 +1823,7 @@ property of their respective owners.
     ["path", { d: "m15 5 4 4" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/play.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/play.mjs
   var Play = [
     [
       "path",
@@ -1821,33 +1831,33 @@ property of their respective owners.
     ]
   ];
 
-  // node_modules/lucide/dist/esm/icons/plus.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/plus.mjs
   var Plus = [
     ["path", { d: "M5 12h14" }],
     ["path", { d: "M12 5v14" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/presentation.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/presentation.mjs
   var Presentation = [
     ["path", { d: "M2 3h20" }],
     ["path", { d: "M21 3v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V3" }],
     ["path", { d: "m7 21 5-5 5 5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/printer.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/printer.mjs
   var Printer = [
     ["path", { d: "M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" }],
     ["path", { d: "M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6" }],
     ["rect", { x: "6", y: "14", width: "12", height: "8", rx: "1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/redo-2.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/redo-2.mjs
   var Redo2 = [
     ["path", { d: "m15 14 5-5-5-5" }],
     ["path", { d: "M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/refresh-cw.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/refresh-cw.mjs
   var RefreshCw = [
     ["path", { d: "M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" }],
     ["path", { d: "M21 3v5h-5" }],
@@ -1855,21 +1865,21 @@ property of their respective owners.
     ["path", { d: "M8 16H3v5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/rotate-cw-square.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/rotate-cw-square.mjs
   var RotateCwSquare = [
     ["path", { d: "M12 5H6a2 2 0 0 0-2 2v3" }],
     ["path", { d: "m9 8 3-3-3-3" }],
     ["path", { d: "M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/rows-3.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/rows-3.mjs
   var Rows3 = [
     ["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }],
     ["path", { d: "M21 9H3" }],
     ["path", { d: "M21 15H3" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/save.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/save.mjs
   var Save = [
     [
       "path",
@@ -1881,7 +1891,7 @@ property of their respective owners.
     ["path", { d: "M7 3v4a1 1 0 0 0 1 1h7" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/scan.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/scan.mjs
   var Scan = [
     ["path", { d: "M3 7V5a2 2 0 0 1 2-2h2" }],
     ["path", { d: "M17 3h2a2 2 0 0 1 2 2v2" }],
@@ -1889,7 +1899,16 @@ property of their respective owners.
     ["path", { d: "M7 21H5a2 2 0 0 1-2-2v-2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/send-to-back.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/scissors.mjs
+  var Scissors = [
+    ["circle", { cx: "6", cy: "6", r: "3" }],
+    ["path", { d: "M8.12 8.12 12 12" }],
+    ["path", { d: "M20 4 8.12 15.88" }],
+    ["circle", { cx: "6", cy: "18", r: "3" }],
+    ["path", { d: "M14.8 14.8 20 20" }]
+  ];
+
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/send-to-back.mjs
   var SendToBack = [
     ["rect", { x: "14", y: "14", width: "8", height: "8", rx: "2" }],
     ["rect", { x: "2", y: "2", width: "8", height: "8", rx: "2" }],
@@ -1897,45 +1916,45 @@ property of their respective owners.
     ["path", { d: "M14 7h1a2 2 0 0 1 2 2v1" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/square.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/square.mjs
   var Square = [["rect", { width: "18", height: "18", x: "3", y: "3", rx: "2" }]];
 
-  // node_modules/lucide/dist/esm/icons/strikethrough.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/strikethrough.mjs
   var Strikethrough = [
     ["path", { d: "M16 4H9a3 3 0 0 0-2.83 4" }],
     ["path", { d: "M14 12a4 4 0 0 1 0 8H6" }],
     ["line", { x1: "4", x2: "20", y1: "12", y2: "12" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-align-center.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/text-align-center.mjs
   var TextAlignCenter = [
     ["path", { d: "M21 5H3" }],
     ["path", { d: "M17 12H7" }],
     ["path", { d: "M19 19H5" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-align-end.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/text-align-end.mjs
   var TextAlignEnd = [
     ["path", { d: "M21 5H3" }],
     ["path", { d: "M21 12H9" }],
     ["path", { d: "M21 19H7" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-align-justify.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/text-align-justify.mjs
   var TextAlignJustify = [
     ["path", { d: "M3 5h18" }],
     ["path", { d: "M3 12h18" }],
     ["path", { d: "M3 19h18" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-align-start.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/text-align-start.mjs
   var TextAlignStart = [
     ["path", { d: "M21 5H3" }],
     ["path", { d: "M15 12H3" }],
     ["path", { d: "M17 19H3" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/text-cursor-input.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/text-cursor-input.mjs
   var TextCursorInput = [
     ["path", { d: "M12 20h-1a2 2 0 0 1-2-2 2 2 0 0 1-2 2H6" }],
     ["path", { d: "M13 8h7a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-7" }],
@@ -1944,7 +1963,7 @@ property of their respective owners.
     ["path", { d: "M9 6v12" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/trash.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/trash.mjs
   var Trash = [
     ["path", { d: "M10 11v6" }],
     ["path", { d: "M14 11v6" }],
@@ -1953,32 +1972,32 @@ property of their respective owners.
     ["path", { d: "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/undo-2.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/undo-2.mjs
   var Undo2 = [
     ["path", { d: "M9 14 4 9l5-5" }],
     ["path", { d: "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/underline.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/underline.mjs
   var Underline = [
     ["path", { d: "M6 4v6a6 6 0 0 0 12 0V4" }],
     ["line", { x1: "4", x2: "20", y1: "20", y2: "20" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/type.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/type.mjs
   var Type = [
     ["path", { d: "M12 4v16" }],
     ["path", { d: "M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" }],
     ["path", { d: "M9 20h6" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/ungroup.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/ungroup.mjs
   var Ungroup = [
     ["rect", { x: "11", y: "14", width: "10", height: "7", rx: "2" }],
     ["rect", { x: "3", y: "3", width: "10", height: "7", rx: "2" }]
   ];
 
-  // node_modules/lucide/dist/esm/icons/x.mjs
+  // ../dom-slides-release-v021/node_modules/lucide/dist/esm/icons/x.mjs
   var X = [
     ["path", { d: "M18 6 6 18" }],
     ["path", { d: "m6 6 12 12" }]
@@ -2009,6 +2028,8 @@ property of their respective owners.
     Code,
     Download,
     Copy,
+    CopyPlus,
+    Scissors,
     Printer,
     FileText,
     Presentation,
@@ -2443,7 +2464,7 @@ property of their respective owners.
     ${button("download", "Download", "下载 HTML", { text: "下载 HTML" })}${button("copy", "Copy", "复制 HTML", { text: "复制 HTML" })}${button("print", "Printer", "浏览器打印 / PDF", { text: "打印" })}
   </div>
   <div class="menu-panel" data-menu="more" role="menu" hidden>${button("source", "Code", "查看或修改源码", { text: "源码" })}${button("save", "Save", `立即保存 (${keys.save})`, { text: "立即保存" })}<div class="menu-separator"></div>${button("help", "TextCursorInput", "快捷键与使用帮助", { text: "快捷键与帮助" })}</div>
-  <div class="menu-panel" data-menu="element" role="menu" hidden><div class="shape-more-section" hidden><label class="shape-adjust">形状调整 <input type="range" min="0" max="50" step="1" data-shape-prop="adjust" aria-label="形状调整"></label><div class="menu-separator"></div></div><div class="more-text-section" hidden><div class="more-text-formats" role="group" aria-label="更多文字格式">${fmt("italic", "Italic", "斜体")}${fmt("underline", "Underline", "下划线")}${fmt("strikeThrough", "Strikethrough", "删除线")}</div>${button("text-layout", "TextCursorInput", "文字适配：检测溢出、调整高度和字号", { text: "文字适配", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}<button data-fmt="removeFormat">${icon("Type")}清除文字格式</button><div class="menu-separator"></div></div>${button("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${button("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${button("group-enter", "MousePointer2", "进入组合", { text: "进入组合", attrs: "hidden" })}${button("group-exit", "ChevronLeft", "返回上层组合", { text: "返回上层", attrs: "hidden" })}${button("select-all", "MousePointer2", `全选当前页或组合 (${keys["select-all"]})`, { text: "全选" })}${button("element-duplicate", "Copy", `复制元素 (${keys["element-duplicate"]})`, { text: "复制元素" })}${button("element-front", "BringToFront", "置于顶层", { text: "置于顶层" })}${button("element-back", "SendToBack", "置于底层", { text: "置于底层" })}${button("element-delete", "Trash2", "删除元素 (Delete)", { text: "删除元素" })}</div>
+  <div class="menu-panel" data-menu="element" role="menu" hidden><div class="shape-more-section" hidden><label class="shape-adjust">形状调整 <input type="range" min="0" max="50" step="1" data-shape-prop="adjust" aria-label="形状调整"></label><div class="menu-separator"></div></div><div class="more-text-section" hidden><div class="more-text-formats" role="group" aria-label="更多文字格式">${fmt("italic", "Italic", "斜体")}${fmt("underline", "Underline", "下划线")}${fmt("strikeThrough", "Strikethrough", "删除线")}</div>${button("text-layout", "TextCursorInput", "文字适配：检测溢出、调整高度和字号", { text: "文字适配", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}<button data-fmt="removeFormat">${icon("Type")}清除文字格式</button><div class="menu-separator"></div></div>${button("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${button("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${button("group-enter", "MousePointer2", "进入组合", { text: "进入组合", attrs: "hidden" })}${button("group-exit", "ChevronLeft", "返回上层组合", { text: "返回上层", attrs: "hidden" })}${button("select-all", "MousePointer2", `全选当前页或组合 (${keys["select-all"]})`, { text: "全选" })}${button("element-copy", "Copy", `复制 (${keys["object-copy"]})`, { text: "复制" })}${button("element-cut", "Scissors", `剪切 (${keys["object-cut"]})`, { text: "剪切" })}${button("element-duplicate", "CopyPlus", `就地复制 (${keys["element-duplicate"]})`, { text: "就地复制" })}${button("element-front", "BringToFront", "置于顶层", { text: "置于顶层" })}${button("element-back", "SendToBack", "置于底层", { text: "置于底层" })}${button("element-delete", "Trash2", "删除元素 (Delete)", { text: "删除元素" })}</div>
   <div class="menu-panel" data-menu="page" role="menu" hidden>${button("page-add", "Plus", "在此后新增页面", { text: "新增页面" })}${button("page-copy", "Copy", "复制页面", { text: "复制页面" })}${button("page-rename", "TextCursorInput", "重命名页面", { text: "重命名" })}${button("page-size", "Maximize", "修改当前画布尺寸", { text: "画布尺寸" })}<div class="menu-separator"></div>${button("page-up", "ArrowUp", "上移页面", { text: "上移" })}${button("page-down", "ArrowDown", "下移页面", { text: "下移" })}<div class="menu-separator"></div>${button("page-delete", "Trash2", "删除页面", { text: "删除页面" })}</div>
   <div class="menu-panel status-panel" data-menu="status" role="menu" hidden><p class="status-detail"></p>${button("retry", "RefreshCw", "重试保存", { text: "重试", attrs: "hidden" })}${button("recover", "RefreshCw", "恢复未保存草稿", { text: "恢复草稿", attrs: "hidden" })}${button("conflict", "Download", "下载当前副本并同步最新文件", { text: "下载副本并同步", attrs: "hidden" })}</div>
   <div class="empty-canvas" hidden>${icon("Presentation")}<p>从第一页开始</p>${button("page-add", "Plus", "新增页面", { text: "新增页面", cls: "primary" })}</div>
@@ -2451,7 +2472,7 @@ property of their respective owners.
   <div class="modal" role="dialog" aria-label="HTML 源码" aria-modal="true" hidden><div class="box"><div class="mh"><b>源码</b><span class="hint">${keys.source} 应用；新脚本保存后重新打开运行。</span><span class="sp"></span>${button("src-copy", "Copy", "复制源码", { text: "复制" })}${button("src-download", "Download", "下载源码", { text: "下载" })}<button data-act="src-apply" class="primary">应用</button>${button("src-close", "X", "关闭源码", { cls: "icon-only" })}</div><textarea spellcheck="false" aria-label="HTML 源码"></textarea></div></div>
   <div class="help-dialog" role="dialog" aria-modal="true" aria-labelledby="shortcut-help-title" hidden><div class="box help-box"><div class="mh"><h2 id="shortcut-help-title">快捷键与帮助</h2><span class="sp"></span>${button("help-close", "X", "关闭快捷键与帮助 (Esc)", { cls: "icon-only" })}</div><div class="help-content" tabindex="0" aria-label="快捷键说明">
     <p class="help-note">画布快捷键在编辑时生效；输入文字、裁切和弹层保留各自操作。${keys.mac ? "此处显示 Mac 键位，Ctrl 组合键也可使用。" : "此处显示 Ctrl 键位。"}</p>
-    ${[["选择与组合", [["全选当前页 / 组合内", keys["select-all"]], ["组合", keys.group], ["取消组合", keys.ungroup], ["增减选择", `${keys.shift} / ${keys.mod} + 单击`], ["按方向扩选", keys.extend], ["进入组 / 改字 / 裁切", "Enter / 双击"], ["取消操作 / 返回上层", "Esc"]]], ["编辑与保存", [["撤销", keys.undo], ["重做", keys.redo], ["复制所选对象", keys["object-copy"]], ["粘贴对象", keys["object-paste"]], ["就地复制", keys["element-duplicate"]], ["删除对象", "Delete / Backspace"], ["微调 1px / 10px", `方向键 / ${keys.shift} + 方向键`], ["保存", keys.save], ["应用源码（源码内）", keys.source]]], ["视图与手势", [["放大 / 缩小", `${keys["zoom-in"]} / ${keys["zoom-out"]}`], ["100% / 适应窗口", `${keys["zoom-reset"]} / ${keys["zoom-fit"]}`], ["平移画布", "空格 + 拖动"], ["暂停吸附", keys.alt], ["旋转 15°步进", `${keys.shift} + 旋转`], ["编辑时切页", "PageUp / PageDown"]]]].map(([title, rows]) => `<section class="help-section"><h3>${title}</h3><dl>${rows.map(([label, key]) => `<div class="help-row"><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join("")}</dl></section>`).join("")}
+    ${[["选择与组合", [["全选当前页 / 组合内", keys["select-all"]], ["组合", keys.group], ["取消组合", keys.ungroup], ["增减选择", `${keys.shift} / ${keys.mod} + 单击`], ["按方向扩选", keys.extend], ["进入组 / 改字 / 裁切", "Enter / 双击"], ["取消操作 / 返回上层", "Esc"]]], ["编辑与保存", [["撤销", keys.undo], ["重做", keys.redo], ["复制所选对象", keys["object-copy"]], ["剪切所选对象", keys["object-cut"]], ["粘贴对象", keys["object-paste"]], ["就地复制", keys["element-duplicate"]], ["删除对象", "Delete / Backspace"], ["微调 1px / 10px", `方向键 / ${keys.shift} + 方向键`], ["保存", keys.save], ["应用源码（源码内）", keys.source]]], ["视图与手势", [["放大 / 缩小", `${keys["zoom-in"]} / ${keys["zoom-out"]}`], ["100% / 适应窗口", `${keys["zoom-reset"]} / ${keys["zoom-fit"]}`], ["平移画布", "空格 + 拖动"], ["暂停吸附", keys.alt], ["旋转 15°步进", `${keys.shift} + 旋转`], ["编辑时切页", "PageUp / PageDown"]]]].map(([title, rows]) => `<section class="help-section"><h3>${title}</h3><dl>${rows.map(([label, key]) => `<div class="help-row"><dt>${label}</dt><dd><kbd>${key}</kbd></dd></div>`).join("")}</dl></section>`).join("")}
     ${WORKSPACE ? '<p class="help-note">工作区编辑：拖到其他画布移动；Alt/Option 拖动复制，均可一步撤销。</p>' : ""}
     <p class="help-note">空白处拖动框选，${keys.shift} + 框选追加。裁切内的撤销 / 重做使用局部历史，Enter 完成、Esc 取消。图片和文字可在元素工具条进一步调整。</p>
   </div></div></div>
@@ -4083,7 +4104,7 @@ property of their respective owners.
     }
   }
 
-  // node_modules/@chenglou/pretext/dist/generated/engine-break-data.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/generated/engine-break-data.js
   var classMaps = { "chromium/line_normal": [0, 182], "chromium/line_normal_cj": [1, 182], "apple/line_normal": [2, 183], "apple/line": [3, 183], "apple/line_cj": [4, 183], "chromium/char": [5, 148], "apple/char": [6, 149], "gecko/line": [7, 196], "gecko/east_asian_width": [8, 38], "chromium/script": [9, 80] };
   var jointClassCount = 248;
   var classRunsVarints = "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AAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoDAAIaAwACGgMAAhoD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";
@@ -4098,7 +4119,7 @@ property of their respective owners.
   var geckoLineEotProperty = 67;
   var geckoLineBreakStatesPacked = "kCQB/QMBAf8AAgABAwABBAH9BQgAAQYB/QQKAAEEAf0EEwAHPQH/DkQB/wdEAf8BBQT///8qBEgADEQC/T8BAgAgiAEBKgEPAT5SiAEE/z//QA6IAQAWRAL/Pg/MAQH/BgIAIMwBABDUAgBAkAIABCEAIkQBPBKIAQAOoAQB/SvMAQH/BgEACAwAEQEBKhIXAf1KAQH/BKwEAAa+AQH9Bw0D/f+yFpgDACawBgA6RAAE5AQC/TtV9AYAIEQABYgBAv87ErgHAB3qAgAnLAAEiAEB/xGQAgBA1AIAPkQAJewFADQBABuIAQAEJAA4zAEB/yKQAgADoAQBPQugBAE9KdgLAB3ACAH/RLAGACpEAf9xoAQAIvQGAAREACbUAgABiwMAAiwAZqAEAEeoBQCEAQEAXdwDABuwBgArrAgBNxDACABARAAgzAEAArwBADrgDAAtRAAVswoAWkQAQNgLAAoPASs/RAEsHDABOC7gDAAL7AUBQVj0FwAOkBMB/RGQEwP9Of0qhAkB/07gDABeRAAoiQQAFagWAEyYAwAPxBMACzABNRIlAGmMCgErQ4wKABGwBgH+BQEB/wADAf8ABgH/BhIABg0C/v8EHAT//v/+CAEASZgUAf0LzBIABrAGAAUPArH9FLgYAAfxBgAb9AYAAEQBPFbQGwACVwA4sAYB/iwBAf8OEwATogIB/xAOASoFtwIAVsAIAHwBAA==";
 
-  // node_modules/@chenglou/pretext/dist/line-breaks.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/line-breaks.js
   var BREAK = 1;
   var CLUSTER_START = 2;
   var FORCED_BREAK = 4;
@@ -4836,7 +4857,7 @@ property of their respective owners.
     return nextBreakablePosition(pairs, f, 0) === 0;
   }
 
-  // node_modules/@chenglou/pretext/dist/graphemes.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/graphemes.js
   var CLUSTER_END = 128;
   function parseGraphemeRules(table) {
     const rules = getBreakRules(table === "gecko/char" ? "chromium/char" : table);
@@ -4893,7 +4914,7 @@ property of their respective owners.
     return count;
   }
 
-  // node_modules/@chenglou/pretext/dist/gecko-line-breaks.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/gecko-line-breaks.js
   var CH_SHY = 173;
   var isSurrogatePair = (a, b) => (a & 64512) === 55296 && (b & 64512) === 56320;
   var combine = (a, b) => 65536 + (a - 55296 << 10) + (b - 56320);
@@ -5510,7 +5531,7 @@ property of their respective owners.
     return { breaks: flags, leftOut: tr.leftOut, dropsBidiControl: tr.dropsBidiControl };
   }
 
-  // node_modules/@chenglou/pretext/dist/analysis.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/analysis.js
   var TEXT2 = 0;
   var SPACE2 = 1;
   var ZERO_WIDTH_BREAK = 2;
@@ -5942,7 +5963,7 @@ property of their respective owners.
     return breaks;
   }
 
-  // node_modules/@chenglou/pretext/dist/generated/webkit-generic-families.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/generated/webkit-generic-families.js
   var webkitScriptLanguages = " aa ab ady af ak am ar as ast av ay az ba be bg bi bn bo bs ca ce ceb ch chk cs cy da de dv dz ee efi el en es et eu fa fi fil fj fo fr fur fy ga gaa gd gil gl gn gsw gu ha haw he hi hil ho hr ht hu hy id ig ii ilo inh is it iu ja jv ka kaj kam kbd kha kk kl km kn ko kok kos kpe krc ks ku kum ky la lah lb lez ln lo lt lv mai mdf mg mh mi mk ml mn mr ms mt my myv na nb ne niu nl nn nr nso ny oc om or os pa pag pap pau pl pon ps pt qu rm rn ro ru rw sa sah sat sd se sg si sid sk sl sm so sq sr ss st su sv sw ta te tet tg th ti tig tk tkl tl tn to tpi tr trv ts tt tvl tw ty tyv udm ug uk und ur uz ve vi wal war wo xh yap yo za zh zh-hk zh-tw zu ";
   var webkitScriptSubtags = " arab armn bali batk beng blis bopo brah brai bugi buhd cans cham cher cirt copt cprt cyrl cyrs deva dsrt egyd egyh egyp ethi geok geor glag goth grek gujr guru hang hani hano hans hant hebr hira hmng hrkt hung inds ital java jpan kali kana khar khmr knda kore laoo latf latg latn lepc limb lina linb mand maya mero mlym mong mymr nkoo ogam orkh orya osma perm phag phnx plrd qaai roro runr sara shaw sinh sylo syrc syre syrj syrn tagb tale talu taml telu teng tfng tglg thaa thai tibt ugar vaii visp xpeo xsux yiii zxxx ";
   var webkitGenericFamilyNames = ["", "Zapfino", "Menlo", "Kefa III", "Geeza Pro", "Snell Roundhand", "Kohinoor Bangla", "Kokonor|Kailasa", "Kailasa", "Galvji", "Noto Sans Tagalog", "Kohinoor Gujarati", "Lucida Grande|Arial Hebrew", "Apple Chancery|Arial Hebrew", "Courier New", "ITF Devanagari|Kohinoor Devanagari", "Kohinoor Devanagari", "Noto Sans Armenian", "Euphemia UCAS", "Hiragino Mincho ProN", "Hiragino Sans", "Helvetica", "Khmer MN|Khmer Sangam MN", "Khmer Sangam MN", "Kannada MN|Noto Sans Kannada", "Noto Sans Kannada", "AppleMyungjo|Apple SD Gothic Neo", "Apple SD Gothic Neo", "Noto Nastaliq Urdu", "Lao MN|Lao Sangam MN", "Lao Sangam MN", "Malayalam MN|Malayalam Sangam MN", "Malayalam Sangam MN", "Noto Serif Myanmar|Noto Sans Myanmar", "Noto Sans Myanmar", "Oriya MN|Noto Sans Oriya", "Noto Sans Oriya", "Mukta Mahee", "Sinhala MN|Sinhala Sangam MN", "Sinhala Sangam MN", "Tamil Sangam MN", "Kohinoor Telugu", "Thonburi", "Songti TC|PingFang HK", "PingFang HK", "Songti SC|PingFang SC", "PingFang SC", "Songti TC|PingFang TC", "PingFang TC", "Songti TC|PingFang MO", "PingFang MO"];
@@ -6010,7 +6031,7 @@ property of their respective owners.
     "zh-hant-mo": [49, 50, 49, 49, 2]
   };
 
-  // node_modules/@chenglou/pretext/dist/measurement.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/measurement.js
   var measureState = null;
   var cachedEngineProfile = null;
   var MAX_PREFIX_FIT_GRAPHEMES = 96;
@@ -6648,7 +6669,7 @@ property of their respective owners.
     measureState.segments = 0;
   }
 
-  // node_modules/@chenglou/pretext/dist/han-kerning.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/han-kerning.js
   var OTHER = 0;
   var OPEN = 1;
   var CLOSE = 2;
@@ -6840,7 +6861,7 @@ property of their respective owners.
     return out;
   }
 
-  // node_modules/@chenglou/pretext/dist/prepare.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/prepare.js
   function countRenderedSpacingGraphemes(text, kind, graphemeTable) {
     return kind === ZERO_WIDTH_BREAK ? 0 : findGraphemeEnds(graphemeTable, text, 0, text.length, null);
   }
@@ -7309,7 +7330,7 @@ property of their respective owners.
     return trims;
   }
 
-  // node_modules/@chenglou/pretext/dist/line-break.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/line-break.js
   var BREAK_AFTER_KINDS = 1 << SPACE2 | 1 << ZERO_WIDTH_BREAK | 1 << SOFT_HYPHEN | 1 << PRESERVED_SPACE | 1 << TAB2;
   function breaksAfterKind(kind) {
     return (1 << kind & BREAK_AFTER_KINDS) !== 0;
@@ -7941,7 +7962,7 @@ property of their respective owners.
     return lineW - endTrimmed;
   }
 
-  // node_modules/@chenglou/pretext/dist/layout.js
+  // ../dom-slides-release-v021/node_modules/@chenglou/pretext/dist/layout.js
   function prepareInternal(text, font2, includeSegments, options) {
     const wordBreak = options?.wordBreak ?? "normal";
     const engineProfile = getEngineProfile();
@@ -10399,6 +10420,12 @@ property of their respective owners.
       addEventListener("copy", (e) => {
         if (!crop.active) transfer.copyEvent(e);
       }, true);
+      addEventListener("cut", (e) => {
+        if (!crop.active && transfer.cutEvent(e)) {
+          removeEl(S.sel);
+          toast("已剪切元素 · 可撤销");
+        }
+      }, true);
       addEventListener("paste", (e) => {
         if (!crop.active) transfer.pasteEvent(e);
       }, true);
@@ -10637,6 +10664,12 @@ property of their respective owners.
         ungroup: ungroupSelection,
         "group-enter": () => enterGroup(S.sel),
         "group-exit": exitGroup,
+        "element-copy": () => {
+          if (S.sel && !document.execCommand("copy")) toast("无法写入剪贴板，请使用复制快捷键");
+        },
+        "element-cut": () => {
+          if (S.sel && !document.execCommand("cut")) toast("无法写入剪贴板，请使用剪切快捷键");
+        },
         "element-duplicate": () => S.sel && duplicate(S.sel),
         "element-delete": () => S.sel && removeEl(S.sel),
         "element-front": () => layer(true),
@@ -10716,6 +10749,8 @@ property of their respective owners.
         "group-enter",
         "group-exit",
         "select-all",
+        "element-copy",
+        "element-cut",
         "element-duplicate",
         "element-delete",
         "element-front",

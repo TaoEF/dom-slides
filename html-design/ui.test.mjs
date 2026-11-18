@@ -835,11 +835,11 @@ test("keyboard adaptation opens with useful focus and image menus skip hidden te
     await p.keyboard.press('Enter');
     const imageActions = await p.locator('[data-menu=element] button').evaluateAll(nodes =>
       nodes.filter(n => !n.disabled && n.getClientRects().length).map(n => n.dataset.act));
-    assert.deepEqual(imageActions, ['select-all', 'element-duplicate', 'element-front', 'element-back', 'element-delete']);
+    assert.deepEqual(imageActions, ['select-all', 'element-copy', 'element-cut', 'element-duplicate', 'element-front', 'element-back', 'element-delete']);
     await p.keyboard.press('ArrowDown');
     assert.equal(await focused(), 'select-all', 'the new visible action precedes duplicate; hidden text/group actions are skipped');
     await p.keyboard.press('ArrowDown');
-    assert.equal(await focused(), 'element-duplicate');
+    assert.equal(await focused(), 'element-copy');
     await p.keyboard.press('ArrowUp');
     assert.equal(await focused(), 'select-all');
     await p.keyboard.press('Escape');
