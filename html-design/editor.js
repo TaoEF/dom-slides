@@ -9751,6 +9751,8 @@ property of their respective owners.
       }
       function markEditableObject(target, board) {
         if (!board || !persistence?.canEdit()) return null;
+        const markedOwner = target.closest?.("[data-el]");
+        if (markedOwner && isTextObject(markedOwner)) return null;
         let candidate = null, inlineText = null, painted = null, text = false;
         for (let n = target; n && n !== board; n = n.parentElement) {
           if (n.hasAttribute?.("data-el")) break;
@@ -9960,15 +9962,13 @@ property of their respective owners.
       });
       function growTextToFit(el) {
         if (!el || el.scrollHeight <= el.clientHeight + 1) return;
+        const cs = getComputedStyle(el);
+        const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+        const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+        const height = Math.ceil(el.scrollHeight + (cs.boxSizing === "border-box" ? border : -padding));
         el.style.maxHeight = "none";
-        el.style.height = "auto";
-        el.style.blockSize = "auto";
-        if (el.scrollHeight > el.clientHeight + 1) {
-          const cs = getComputedStyle(el);
-          const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
-          const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
-          el.style.height = Math.ceil(el.scrollHeight + (cs.boxSizing === "border-box" ? border : -padding)) + "px";
-        }
+        el.style.height = `${height}px`;
+        el.style.blockSize = `${height}px`;
       }
       function startText(el, x, y) {
         if (!el || S.text?.el === el || el.matches(MEDIA) || el.querySelector("[data-el]"))

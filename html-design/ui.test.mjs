@@ -660,11 +660,28 @@ test('Enter grows a fixed text frame only when its content overflows and undo re
     assert.equal(await box.textContent(), 'Hello');
     await p.locator('[data-act=redo]').click();
     assert.ok(await box.evaluate(node => node.offsetHeight) >= 120);
-    await box.dblclick();
+    const enteredLine = box.locator('div').first();
+    await enteredLine.click();
+    assert.equal(await enteredLine.getAttribute('data-el'), null, 'a line inside a marked text frame is not promoted to an object');
+    await enteredLine.dblclick();
+    assert.equal(await box.getAttribute('contenteditable'), 'true', 'double-clicking a line edits its outer text frame');
     await p.keyboard.press('ControlOrMeta+A');
     await p.keyboard.type('Hi');
     await p.keyboard.press('Escape');
     assert.ok(await box.evaluate(node => node.offsetHeight) >= 120, 'editing fewer lines preserves the existing frame height');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('styled text inside a marked text object remains part of that object', async () => {
+  const p = await open();
+  try {
+    const title = p.locator('[data-el=p1-title]');
+    const span = title.locator('span');
+    await span.click();
+    assert.equal(await span.getAttribute('data-el'), null);
+    await span.dblclick();
+    assert.equal(await title.getAttribute('contenteditable'), 'true');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
