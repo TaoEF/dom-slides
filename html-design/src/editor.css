@@ -407,9 +407,8 @@ button.primary:hover:not(:disabled) {
 .tbar .color-control .color-swatch, .tbar .color-control .shape-swatch { box-shadow: 0 0 0 1px #ffffff90; }
 .text-tools .number-stepper { width: 64px; }
 .text-tools .number-stepper input { width: 47px; font-size: 14px; }
-.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; }
+.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; padding:0; }
 .color-control:hover { background:var(--hover); }
-.color-control input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }
 .color-control .color-swatch, .color-control .shape-swatch {
   display: block;
   width: 19px;
@@ -485,7 +484,7 @@ button.primary:hover:not(:disabled) {
   display: none;
 }
 .sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }
-.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="se"]) { display:none; }
+.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="s"]):not([data-h="se"]) { display:none; }
 .sel.unsupported i { display:none; }
 .rotate-handle {
   position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;
@@ -620,6 +619,27 @@ button.primary:hover:not(:disabled) {
   border-radius: 6px;
   font-size: 12px;
 }
+.color-palette { width:306px; max-width:calc(100vw - 20px); padding:14px; color:#292929; }
+.color-palette .palette-heading { font-size:13px; color:#686868; margin-bottom:10px; }
+.palette-current, .palette-recommended { display:grid; grid-template-columns:repeat(9, 1fr); gap:5px; }
+.color-palette .palette-swatch { display:block; width:100%; height:28px; min-width:0; padding:0; border:1px solid #00000014; border-radius:6px; }
+.color-palette .palette-swatch:hover { outline:2px solid #777; outline-offset:1px; }
+.color-palette .palette-swatch[aria-pressed="true"] { outline:2px solid #666; outline-offset:1px; }
+.color-palette .palette-add { display:flex; align-items:center; justify-content:center; background:#fff; color:#4c4c4c; }
+.color-palette .palette-add .icon { width:18px; height:18px; }
+.palette-divider { height:1px; margin:14px 0; background:#ececec; }
+.palette-recommended { row-gap:5px; }
+.palette-custom-heading { display:flex; align-items:center; gap:5px; margin-bottom:13px; font-size:13px; }
+.color-palette .palette-back { width:27px; height:27px; padding:5px; justify-content:center; }
+.palette-sv { position:relative; height:148px; border-radius:7px; background:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent),var(--palette-hue,#f00); cursor:crosshair; touch-action:none; }
+.palette-cursor { position:absolute; left:100%; top:0; width:13px; height:13px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0008; transform:translate(-50%,-50%); pointer-events:none; }
+.palette-hue { display:block; width:100%; height:16px; margin:15px 0; appearance:none; border-radius:9px; background:linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); }
+.palette-hue::-webkit-slider-thumb { appearance:none; width:16px; height:16px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0006; background:#fff; cursor:pointer; }
+.palette-hex-form { display:flex; align-items:center; gap:7px; }
+.palette-hex-form label { color:#666; }
+.palette-hex-form input { flex:1; min-width:0; height:31px; padding:0 8px; border:1px solid #ddd; border-radius:5px; font:inherit; color:#292929; }
+.color-palette .palette-hex-form button { width:auto; height:31px; padding:0 12px; background:#242424; color:#fff; justify-content:center; }
+.palette-hex-error { margin:7px 0 0; color:#b32727; font-size:11px; }
 .shape-palette { display: grid; grid-template-columns: repeat(4, 42px); gap: 4px; min-width: 0; padding: 8px; }
 .shape-palette[hidden] { display: none; }
 .shape-palette button { width: 42px; height: 42px; padding: 9px; justify-content: center; }

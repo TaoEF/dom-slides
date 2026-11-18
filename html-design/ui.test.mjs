@@ -612,6 +612,80 @@ test("text corners scale nested typography at 50% and 200%; side handles only re
   }
 });
 
+test('bottom text handle shortens a fixed frame after font size decreases without changing type size', async () => {
+  const p = await open();
+  try {
+    const title = p.locator('[data-el=p1-title]');
+    await title.evaluate(node => { node.style.height = '200px'; node.style.minHeight = '200px'; });
+    await title.click();
+    await p.locator('.fs').fill('32');
+    await p.locator('.fs').press('Enter');
+    await p.keyboard.press('Escape');
+    await title.click();
+    assert.equal(await title.evaluate(node => node.offsetHeight), 200);
+    const scale = await title.evaluate(node => node.getBoundingClientRect().height / node.offsetHeight);
+    await dragHandle(p, 's', 0, -70 * scale);
+    near(await title.evaluate(node => node.offsetHeight), 130, 2);
+    assert.equal(await title.evaluate(node => getComputedStyle(node).fontSize), '32px');
+    assert.equal(await title.evaluate(node => node.scrollHeight <= node.clientHeight + 1), true, 'text remains visible');
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await title.evaluate(node => node.offsetHeight), 200);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('Enter grows a fixed text frame only when its content overflows and undo restores both', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p1]').evaluate(board => {
+      const box = document.createElement('div');
+      box.dataset.el = 'enter-grow';
+      box.dataset.textBox = '';
+      box.textContent = 'Hello';
+      box.style.cssText = 'position:absolute;left:370px;top:180px;width:240px;height:48px;min-height:48px;overflow:hidden;font:32px/40px Arial';
+      board.append(box);
+    });
+    const box = p.locator('[data-el=enter-grow]');
+    await box.dblclick();
+    await p.keyboard.press('End');
+    await p.keyboard.press('Enter');
+    await p.keyboard.type('World');
+    assert.ok(await box.evaluate(node => node.offsetHeight) >= 80, 'the second line expands the frame while typing');
+    await p.keyboard.press('Enter');
+    assert.ok(await box.evaluate(node => node.offsetHeight) >= 120, 'a further line expands it again');
+    assert.equal(await box.evaluate(node => node.scrollHeight <= node.clientHeight + 1), true, 'new lines remain visible');
+    await p.keyboard.press('Escape');
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await box.evaluate(node => node.offsetHeight), 48);
+    assert.equal(await box.textContent(), 'Hello');
+    await p.locator('[data-act=redo]').click();
+    assert.ok(await box.evaluate(node => node.offsetHeight) >= 120);
+    const enteredLine = box.locator('div').first();
+    await enteredLine.click();
+    assert.equal(await enteredLine.getAttribute('data-el'), null, 'a line inside a marked text frame is not promoted to an object');
+    await enteredLine.dblclick();
+    assert.equal(await box.getAttribute('contenteditable'), 'true', 'double-clicking a line edits its outer text frame');
+    await p.keyboard.press('ControlOrMeta+A');
+    await p.keyboard.type('Hi');
+    await p.keyboard.press('Escape');
+    assert.ok(await box.evaluate(node => node.offsetHeight) >= 120, 'editing fewer lines preserves the existing frame height');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('styled text inside a marked text object remains part of that object', async () => {
+  const p = await open();
+  try {
+    const title = p.locator('[data-el=p1-title]');
+    const span = title.locator('span');
+    await span.click();
+    assert.equal(await span.getAttribute('data-el'), null);
+    await span.dblclick();
+    assert.equal(await title.getAttribute('contenteditable'), 'true');
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
 test("image fit modes keep the frame and source, and undo restores the mode", async () => {
   const p = await open();
   try {
@@ -687,12 +761,12 @@ test("compact navigation keeps the first thumbnail intact and text layout contro
   } finally { await p.close(); }
 });
 
-test('text selection has width handles and one scale corner; insert menu reuses page styles or three defaults', async () => {
+test('text selection has width, height and one scale corner; insert menu reuses page styles or three defaults', async () => {
   const p = await open();
   try {
     await p.locator('[data-el=p1-title]').click();
     const handles = await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h));
-    assert.deepEqual(handles, ['e', 'se', 'w']);
+    assert.deepEqual(handles, ['e', 'se', 's', 'w']);
     await p.locator('[data-el=p1-image]').click();
     assert.equal(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').length), 8);
     const originalCount = await p.locator('[data-artboard=p1] [data-el]').count();
@@ -706,13 +780,16 @@ test('text selection has width handles and one scale corner; insert menu reuses 
     assert.equal(await p.locator('[data-menu=text-styles] .style-swatch').count(), 0);
     assert.equal(await p.locator('[data-menu=text-styles] .style-preview').first().evaluate(node => getComputedStyle(node).fontSize), '27px');
     assert.doesNotMatch((await p.locator('[data-menu=text-styles]').textContent()), /Scalesmall text/);
-    await p.locator('[data-menu=text-styles] button').click();
+    await p.locator('[data-menu=text-styles] button').first().click();
     const inserted = p.locator('[data-artboard=p1] [data-el^=p1-text-]');
     assert.equal(await inserted.evaluate(node => getComputedStyle(node).fontSize), '64px');
     await p.keyboard.type('New title');
     assert.match(await inserted.textContent(), /New title/);
     await p.keyboard.press('Escape');
-    await p.locator('[data-artboard=p2]').evaluate(board => board.querySelector('[data-el]').remove());
+    await p.locator('[data-stage]').evaluate(stage => {
+      for (const node of stage.querySelectorAll('[data-el]'))
+        if (!node.matches('img,svg') && !node.querySelector('[data-el],img,svg')) node.remove();
+    });
     await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
     await p.locator('[data-act=add-text]').click();
     const defaults = await p.locator('[data-menu=text-styles] .style-description').allTextContents();
@@ -724,29 +801,68 @@ test('text selection has width handles and one scale corner; insert menu reuses 
   } finally { await p.close(); }
 });
 
-test('text style menu keeps four largest distinct styles on the current page', async () => {
+test('text style menu scans all pages, deduplicates typography, and scrolls with black previews', async () => {
   const p = await open();
   try {
-    await p.locator('[data-artboard=p1]').evaluate(board => {
-      for (const [index, size] of [44,72,52,18,44].entries()) {
+    await p.locator('[data-artboard=p2]').evaluate(board => {
+      for (const [index, size] of [86,72,52,44,44,18,...Array.from({length:18},(_,i)=>20+i)].entries()) {
         const node = document.createElement('p');
         node.dataset.el = `extra-${index}`;
         node.textContent = `Sample ${index}`;
-        node.style.cssText = `position:absolute;left:450px;top:${30 + index * 45}px;font-size:${size}px`;
+        node.style.cssText = `position:absolute;left:450px;top:${30 + index * 25}px;font-size:${size}px;color:${index===0?'white':'black'}`;
         board.append(node);
       }
+      const hidden = document.createElement('p');
+      hidden.dataset.el = 'hidden-style'; hidden.textContent = 'Hidden';
+      hidden.style.cssText = 'display:none;font-size:200px'; board.append(hidden);
     });
     await p.locator('[data-act=add-text]').click();
     const items = p.locator('[data-menu=text-styles] button');
-    assert.equal(await items.count(), 4);
+    assert.ok(await items.count() > 20);
     const descriptions = await p.locator('[data-menu=text-styles] .style-description').allTextContents();
-    assert.deepEqual(descriptions.map(item => item.match(/\d+(?:\.\d+)?px/)?.[0]), ['72px','64px','52px','44px']);
+    const sizes = descriptions.map(item => Number(item.match(/(\d+(?:\.\d+)?)px/)?.[1]));
+    assert.equal(sizes[0], 86, 'a hidden page contributes the largest visible style');
+    assert.ok(sizes.every((size,i) => i===0 || sizes[i-1]>=size));
+    assert.equal(sizes.filter(size => size===44).length, 1, 'same typography with different text colors is one choice');
+    assert.ok(!sizes.includes(200), 'author-hidden text is excluded');
+    assert.equal(await p.locator('[data-menu=text-styles] .style-preview').first().evaluate(node => getComputedStyle(node).color), 'rgb(17, 17, 17)');
+    assert.equal(await p.locator('[data-menu=text-styles]').evaluate(node => node.scrollHeight > node.clientHeight), true);
     assert.ok(descriptions.every(item => !/Sample|Scalesmall/.test(item)));
+    await items.last().click();
+    const inserted = p.locator('[data-artboard=p1] [data-el^=p1-text-]');
+    assert.equal(await inserted.count(), 1, 'a scrolled choice inserts editable text on the current page');
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
 
-test('an emptied text box keeps its three handles and font scaling', async () => {
+test('color palette finds colors on other pages and applies them to selected text with undo', async () => {
+  const p = await open();
+  try {
+    await p.locator('[data-artboard=p2] [data-el=p2-title]').evaluate(node => { node.style.color = '#d14a2a'; });
+    await p.locator('[data-el=p1-title]').click();
+    await p.locator('[data-act=text-color]').click();
+    assert.equal(await p.locator('[data-menu=colors] input[type=color]').count(), 0, 'the palette has no native RGB dialog');
+    assert.equal(await p.locator('[data-menu=colors] [data-palette-color="#D14A2A"]').count(), 1, 'a hidden page contributes its text color');
+    assert.equal(await p.locator('.palette-recommended .palette-swatch').count(), 63);
+    await p.locator('[data-menu=colors] [data-palette-color="#D14A2A"]').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(209, 74, 42)')), true);
+    await p.keyboard.press('Escape');
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(209, 74, 42)')), false);
+    await p.locator('[data-el=p1-title]').click();
+    await p.locator('[data-act=text-color]').click();
+    await p.locator('[data-palette-custom]').click();
+    await p.locator('.palette-hex').fill('invalid');
+    await p.locator('.palette-hex-form button').click();
+    assert.equal(await p.locator('.palette-hex-error').isVisible(), true);
+    await p.locator('.palette-hex').fill('#2c65bd');
+    await p.locator('.palette-hex-form button').click();
+    assert.equal(await p.locator('[data-el=p1-title]').evaluate(node => [...node.querySelectorAll('*')].some(child => getComputedStyle(child).color === 'rgb(44, 101, 189)')), true);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('an emptied text box keeps its four handles and font scaling', async () => {
   const p = await open();
   try {
     await p.locator('[data-act=add-text]').click();
@@ -758,7 +874,7 @@ test('an emptied text box keeps its three handles and font scaling', async () =>
     await p.keyboard.press('Escape');
     assert.equal(await text.getAttribute('data-text-box'), '');
     assert.ok((await text.boundingBox()).height >= 8);
-    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','s','w']);
     const before = await text.evaluate(node => parseFloat(getComputedStyle(node).fontSize));
     const handle = await p.locator('.sel [data-h=se]').boundingBox();
     await p.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
@@ -772,7 +888,7 @@ test('an emptied text box keeps its three handles and font scaling', async () =>
     await p.keyboard.press('Backspace');
     await p.keyboard.press('Escape');
     assert.equal(await existing.getAttribute('data-text-box'), '');
-    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+    assert.deepEqual(await p.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','s','w']);
     await p.locator('[data-act=more]').click();
     await p.locator('[data-act=source]').click();
     const saved = await p.locator('.modal textarea').inputValue();
@@ -783,7 +899,7 @@ test('an emptied text box keeps its three handles and font scaling', async () =>
       await reopened.locator('[data-act=edit]').click();
       await reopened.locator('[data-el=p1-title]').click();
       assert.equal(await reopened.locator('[data-el=p1-title]').getAttribute('data-text-box'), '');
-      assert.deepEqual(await reopened.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','w']);
+      assert.deepEqual(await reopened.locator('.sel [data-h]').evaluateAll(nodes => nodes.filter(n => getComputedStyle(n).display !== 'none').map(n => n.dataset.h)), ['e','se','s','w']);
     } finally { await reopened.close(); }
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
@@ -803,7 +919,7 @@ test("text alignment cycles with one click and adaptation stays in the element m
       assert.equal(await p.locator('[data-act=text-align]').getAttribute('data-align'), align);
     }
     assert.equal(await p.locator('.color-control svg').count(), 0);
-    assert.equal(await p.locator('.cpick').getAttribute('type'), 'color');
+    assert.equal(await p.locator('[data-act=text-color]').getAttribute('aria-haspopup'), 'dialog');
     assert.equal(await p.locator('.color-swatch').evaluate(n => getComputedStyle(n).borderRadius), '50%');
     await p.locator('[data-act=element-more]').click();
     assert.ok(await p.locator('[data-act=text-layout]').isVisible());
@@ -835,11 +951,11 @@ test("keyboard adaptation opens with useful focus and image menus skip hidden te
     await p.keyboard.press('Enter');
     const imageActions = await p.locator('[data-menu=element] button').evaluateAll(nodes =>
       nodes.filter(n => !n.disabled && n.getClientRects().length).map(n => n.dataset.act));
-    assert.deepEqual(imageActions, ['select-all', 'element-duplicate', 'element-front', 'element-back', 'element-delete']);
+    assert.deepEqual(imageActions, ['select-all', 'element-copy', 'element-cut', 'element-duplicate', 'element-front', 'element-back', 'element-delete']);
     await p.keyboard.press('ArrowDown');
     assert.equal(await focused(), 'select-all', 'the new visible action precedes duplicate; hidden text/group actions are skipped');
     await p.keyboard.press('ArrowDown');
-    assert.equal(await focused(), 'element-duplicate');
+    assert.equal(await focused(), 'element-copy');
     await p.keyboard.press('ArrowUp');
     assert.equal(await focused(), 'select-all');
     await p.keyboard.press('Escape');
