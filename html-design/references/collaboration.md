@@ -34,6 +34,8 @@ node html-design/collaborate.mjs commit <返回的 session.json 绝对路径>
 
 AI commit 后，当前pending页底自动显示「放弃｜接受」，多页右下提供默认收起的汇总。hover/focus放弃原位显示before，离开/接受/Escape恢复after；click放弃才调用Undo。页内改动可逐页 Accept / Undo，新增页可撤回新增，删除页可查看旧版并恢复。共享 CSS/字体/link、内容脚本、全局属性/页外结构、已有页的重排，以及无法安全定位的页结构，均使用整份文档范围，避免恢复不完整。页面由 HTML parser 和稳定 data-artboard 标识识别，不是另一套 blocks 模型。
 
+页底控件只处理当前页。文档级审阅从右下汇总处理，「放弃整份文档修改」需确认后才执行，范围为所有尚未接受的 AI 改动。服务端要求文档级 Undo 带 `confirmDocumentUndo: true`，旧内嵌编辑器的未确认请求会被拒绝。
+
 同页连续 AI 修改保留首次未接受基线。逐页接受只更新恢复参考，不重写 HTML；部分接受后再发生文档级修改，整份撤回仍保留已接受的页。人工编辑并保存会接受被修改页的 AI 结果；如果存在文档级待审阅，则人工修改接受整个审阅。保存反馈会说明隐式接受。选择/进入编辑/缩放、data-bbox 和序号变化不属于真实设计修改。
 
 浏览器先结束手势/改字并 flush，再检查 revision、review generation、写租约和交接状态。flush 可能已经接受目标，所以列表变化时必须重新选择；服务不接受浏览器提供任意旧 HTML 来恢复。Undo 成功刷新文档，清空旧 DOM 的普通撤销/重做命令，之后人工编辑仍可形成新历史。owner 与 viewer 均可在预览态直接操作；viewer 点击后后台执行已有 takeover→原 owner flush/yield→grant 流程，不要求先进入编辑。hover/focus 只读取 before，不接管。交接期间版本、目标或审阅代数变化时停止旧动作，不重放；等待有界，源码或未确认页面名等输入保护保持。页面新增/复制/重命名/移动/删除/拖动同样后台交接，并在 AI pending/lease 期间锁定；普通元素编辑仍需显式编辑模式。

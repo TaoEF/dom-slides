@@ -172,6 +172,7 @@ export function createDocumentStore(root, { leaseMs = 15000, aiLeaseMs = 600000,
           if (!['review/accept', 'review/undo'].includes(action)) fail(404, '未知审阅操作');
           const previous = d.review;
           const all = body.scope === 'all' || diff.scope === 'document';
+          if (action === 'review/undo' && all && body.confirmDocumentUndo !== true) fail(409, '放弃整份文档的修改需要明确确认，请更新编辑器后从审阅汇总操作');
           let html = d.html, baseline = previous.baselineHTML;
           if (action === 'review/accept') baseline = all ? null : acceptScopes(baseline, html, [body.scope]);
           else html = all ? restoreDocument(html, baseline) : restorePage(html, baseline, body.scope);

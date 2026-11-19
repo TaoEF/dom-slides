@@ -1053,7 +1053,6 @@ textarea {
 .review-accept { background:#202020; color:#fff; }
 button.review-accept:hover:not(:disabled) { background:#3c3c3c; }
 button[aria-disabled=true] { opacity:.45; cursor:default; }
-.review-scope { color:var(--muted); font-size:12px; padding:0 8px; }
 .review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }
 .review-summary-bar { display:flex; padding:4px; gap:4px; }
 .review-trigger { flex:1; justify-content:space-between; font-size:12px; }
