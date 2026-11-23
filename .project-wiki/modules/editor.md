@@ -11,6 +11,10 @@ sources:
     status: current
   - path: html-design/src/pages.js
     status: current
+  - path: html-design/src/page-clipboard.js
+    status: current
+  - path: html-design/page-clipboard.test.mjs
+    status: current
   - path: html-design/src/viewport.js
     status: current
   - path: html-design/build.mjs
@@ -205,3 +209,10 @@ workspace-transfer.js保存临时手势/剪贴板快照：同页逻辑roots跨fr
 原型视图坐标、labels、ghost和drop attrs不进序列化/导出；HTML/CSS/DOM继续是真值。旧只读原型保留，新建workspace-editor.html；活跃新稿仍通过begin/commit升级，不直接重建。技术边界与用例见prototypes/README.md和harness实现计划。
 
 跨画布样式冲突不能只检查根框宽高：目标 CSS 的独立 rotate 可能改变方向，后代 display/visibility 可能隐藏富文本但不改变根框。原型转移需同时检查归一化角度、可见性/显示方式和已渲染子树边界；不一致整体回滚（移动和复制均覆盖）。
+
+
+### 整页剪贴板
+
+选中缩略图后可复制整页。将整页剪贴板粘到缩略图时，在它后面插入新页并选中。使用独立的版本化系统剪贴板类型，元素剪贴板仍可从缩略图焦点粘贴到画布，文字编辑继续采用原有行为。复制读取 DOM，不需要取得文件的写入权限。粘贴通过页面管理事务保存；页面、对象与页内 DOM ID 重建，可一次撤销或重做。
+
+跨文件时，静态 HTML/SVG 保留可编辑结构，常用视觉样式从计算值移入页内，内在尺寸和百分比可继续随内容排版。内嵌资源随对象携带，其他图片引用保留源地址。外部字体声明、生成内容和活动节点不随页复制。粘贴前验证剪贴板内容；发现目标文档样式或资源差异导致明显重排时，移除临时页并停止保存。

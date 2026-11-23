@@ -572,8 +572,8 @@ property of their respective owners.
       for (const attr of [...node.attributes]) {
         if (["id", "src", "srcset"].includes(attr.name)) continue;
         let value = attr.value;
-        if (["for", "aria-labelledby", "aria-describedby"].includes(attr.name))
-          value = value.split(" ").map((id) => ids.get(id) || id).join(" ");
+        if (["for", "headers", "aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "aria-flowto", "aria-activedescendant", "aria-details", "aria-errormessage"].includes(attr.name))
+          value = value.split(/\s+/).map((id) => ids.get(id) || id).join(" ");
         for (const [before, after] of ordered) {
           value = value.replaceAll(`url(#${before})`, `url(#${after})`).replaceAll(`url("#${before}")`, `url("#${after}")`).replaceAll(`url('#${before}')`, `url('#${after}')`);
           if (value === `#${before}`) value = `#${after}`;
@@ -1259,11 +1259,11 @@ property of their respective owners.
   }
 
   // html-design/src/crop-geometry.js
-  function cropGeometry(frame, geometry) {
+  function cropGeometry(frame, geometry2) {
     const img = frame?.querySelector(":scope > img[data-crop-image]");
     const fail = (reason) => ({ supported: false, reason });
     if (!frame?.matches('[data-crop-frame="1"]') || !img) return fail("invalid crop structure");
-    const cs = getComputedStyle(frame), s = getComputedStyle(img), g = geometry(frame), inner = geometry(img);
+    const cs = getComputedStyle(frame), s = getComputedStyle(img), g = geometry2(frame), inner = geometry2(img);
     if (cs.filter !== "none" || cs.clipPath !== "none" || cs.maskImage !== "none") return fail("unsupported frame clip or effect");
     if (!g.supported || !inner.supported) return fail("unsupported crop transform");
     if (!["clip", "hidden"].includes(cs.overflowX) || !["clip", "hidden"].includes(cs.overflowY)) return fail("crop frame does not clip");
@@ -3481,6 +3481,170 @@ property of their respective owners.
     return { before, after: board.getAttribute("style") };
   }
 
+  // html-design/src/page-clipboard.js
+  var PAGE_CLIPBOARD_TYPE = "application/x-dom-slides-page+json";
+  var limit = 12 * 1024 * 1024;
+  var maxNodes = 1800;
+  var htmlTags = new Set("section article main aside header footer nav div span p h1 h2 h3 h4 h5 h6 a b strong i em u s del ins mark sub sup small big code pre kbd samp time abbr br wbr hr blockquote cite q dl dt dd ol ul li figure figcaption img table caption colgroup col thead tbody tfoot tr td th".split(" "));
+  var svgTags = new Set("svg g path rect circle ellipse line polyline polygon text tspan defs clippath mask lineargradient radialgradient stop pattern marker symbol use image title desc".split(" "));
+  var cssProperty = /^(?:width|height|(?:min-|max-)?(?:width|height|inline-size|block-size)|display|position|(?:top|right|bottom|left)|inset(?:-.+)?|box-sizing|aspect-ratio|margin(?:-.+)?|padding(?:-.+)?|border(?:-(?!image).+)?|overflow(?:-[xy])?|opacity|visibility|color|background(?:-.+)?|box-shadow|outline(?:-.+)?|font(?:-.+)?|line-height|letter-spacing|word-spacing|(?:text|white-space)(?:-.+)?|overflow-wrap|word-break|hyphens|vertical-align|direction|writing-mode|flex(?:-.+)?|grid(?:-.+)?|(?:row-|column-)?gap|(?:align|justify|place)(?:-.+)?|order|table-layout|border-collapse|border-spacing|caption-side|empty-cells|object-(?:fit|position)|list-style(?:-.+)?|transform(?:-.+)?|translate|rotate|scale|z-index|isolation|mix-blend-mode|filter|backdrop-filter|clip-path|(?:-webkit-)?mask(?:-.+)?|fill(?:-.+)?|stroke(?:-.+)?|paint-order|vector-effect|stop-color|stop-opacity|dominant-baseline|alignment-baseline|baseline-shift|text-anchor|marker-(?:start|mid|end)|d|cx|cy|r|rx|ry|x|y)$/;
+  var preserveAuto = /^(?:(?:min-|max-)?(?:width|height|inline-size|block-size)|top|right|bottom|left|margin(?:-.+)?|(?:padding|inset)-.+|grid-template-(?:columns|rows)|flex-basis)$/;
+  var visualProperties = ["display", "color", "background-color", "font-family", "font-size", "font-weight", "white-space", "visibility"];
+  var transient = /^(?:contenteditable|data-bbox|data-editor(?:-|$)|data-thumb(?:-|$)|data-qa-.*)$/;
+  var urlAttributes = /* @__PURE__ */ new Set(["href", "xlink:href", "src"]);
+  var plainAttributes = /^(?:id|class|title|lang|dir|alt|role|aria-[\w-]+|colspan|rowspan|scope|headers|span|start|reversed|value|width|height|viewbox|preserveaspectratio|[dc]?x[12]?|[dc]?y[12]?|r[xy]?|d|points|pathlength|transform|opacity|(?:fill|stroke)(?:-[\w-]+)?|clip-path|clip-rule|mask|vector-effect|text-anchor|dominant-baseline|alignment-baseline|baseline-shift|(?:offset|stop-(?:color|opacity))|(?:gradient|pattern|mask|clipPath)[\w-]+|fx|fy|fr|lengthadjust|textlength|marker[\w-]+|orient|ref[xy]|xmlns(?::xlink)?)$/i;
+  var dataAttributes = /^data-(?:artboard|title|mode|el|flow-style|text-box|(?:shape|crop|group)(?:-[\w-]+)?)$/;
+  function unsupported() {
+    return new Error("此页含有暂不支持整页复制的内容");
+  }
+  function nodesOf(board) {
+    return [board, ...board.querySelectorAll("*")];
+  }
+  function validTag(node) {
+    const tag = node.localName.toLowerCase();
+    return node.namespaceURI === "http://www.w3.org/2000/svg" ? svgTags.has(tag) : node.namespaceURI === "http://www.w3.org/1999/xhtml" && htmlTags.has(tag);
+  }
+  function resourceURL(value, base, kind) {
+    if (value.startsWith("#")) {
+      if (kind === "image") throw unsupported();
+      return value;
+    }
+    if (kind === "local") throw unsupported();
+    const url = new URL(value, base);
+    if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password) return url.href;
+    if (kind === "image" && /^data:image\/(?:png|gif|jpe?g|webp|avif|svg\+xml|bmp|x-icon)[;,]/i.test(url.href)) return url.href;
+    if (base && url.protocol === "file:" && base.startsWith("file:")) return url.href;
+    if (kind === "link" && ["mailto:", "tel:"].includes(url.protocol)) return url.href;
+    throw unsupported();
+  }
+  function cssValue(value, base, kind) {
+    const urls = /url\(\s*(?:"([^"\\]*)"|'([^'\\]*)'|([^\s"'\\()]+))\s*\)/gi;
+    if (/(?:url\s*\(|image-set\s*\(|(?:-webkit-)?image\s*\(|\\)/i.test(value.replace(urls, ""))) throw unsupported();
+    return value.replace(urls, (_, double, single, bare) => {
+      const url = resourceURL(double ?? single ?? bare, base, kind);
+      return `url("${url.replaceAll('"', "%22")}")`;
+    });
+  }
+  var cssKind = (key) => /^(?:background|list-style|mask-image)/.test(key) ? "image" : "local";
+  function paintValue(value, base, key) {
+    if (key === "position" && ["fixed", "sticky"].includes(value)) throw unsupported();
+    return cssValue(value, base, cssKind(key) === "image" && !/^url\(["']?#/.test(value) ? "image" : "local");
+  }
+  function readAttributes(node, target, base, capturing) {
+    for (const { name, value, namespaceURI } of [...node.attributes]) {
+      if (transient.test(name) && capturing) continue;
+      if (name === "style" || name === "data-flow-style") continue;
+      if (capturing && ["srcset", "sizes", "loading", "decoding", "fetchpriority"].includes(name) && node.matches("img")) continue;
+      if (urlAttributes.has(name.toLowerCase())) {
+        const kind = node.matches("a") ? "link" : node.matches("img,image") ? "image" : "local";
+        if (name === "src" && !node.matches("img") || name !== "src" && !node.matches("a,use,image")) throw unsupported();
+        const url = resourceURL(value.trim(), base, kind);
+        target.setAttributeNS(namespaceURI, name, url);
+        continue;
+      }
+      if (!plainAttributes.test(name) && !dataAttributes.test(name)) {
+        if (capturing && /^data-[\w-]+$/.test(name)) continue;
+        throw unsupported();
+      }
+      const paint = /^(?:fill|stroke|clip-path|mask|marker-(?:start|mid|end))$/.test(name);
+      target.setAttributeNS(namespaceURI, name, paint ? paintValue(value, base, name) : value);
+    }
+  }
+  function writeStyle(input, output, base, strict = false) {
+    for (const key of input) {
+      if (!cssProperty.test(key)) {
+        if (strict) throw unsupported();
+        continue;
+      }
+      output.setProperty(key, paintValue(input.getPropertyValue(key), base, key), input.getPropertyPriority(key));
+    }
+  }
+  function flowStyle(node, target, base, capturing) {
+    if (!node.hasAttribute("data-flow-style")) return;
+    const authored = target.ownerDocument.createElement("div").style;
+    const safe = target.ownerDocument.createElement("div").style;
+    authored.cssText = node.getAttribute("data-flow-style");
+    writeStyle(authored, safe, base, !capturing);
+    target.dataset.flowStyle = safe.cssText;
+  }
+  function copyNode(node, doc, base, capturing) {
+    const target = doc.createElementNS(node.namespaceURI, node.localName);
+    readAttributes(node, target, base, capturing);
+    if (capturing) {
+      const style2 = getComputedStyle(node), typed = node.computedStyleMap?.();
+      for (const pseudo of ["::before", "::after"]) {
+        if (!["none", "normal"].includes(getComputedStyle(node, pseudo).content)) throw unsupported();
+      }
+      for (const key of style2) {
+        if (!cssProperty.test(key) || key === "d") continue;
+        const value = preserveAuto.test(key) && typed?.get(key)?.toString() || style2.getPropertyValue(key);
+        target.style.setProperty(key, key === "font-family" && value === "Times" ? "initial" : paintValue(value, base, key));
+      }
+      if (node.matches("img") && node.currentSrc) {
+        target.setAttribute("src", resourceURL(node.currentSrc, base, "image"));
+        if (style2.aspectRatio === "auto" && node.naturalWidth && node.naturalHeight)
+          target.style.aspectRatio = `auto ${node.naturalWidth} / ${node.naturalHeight}`;
+      }
+    } else writeStyle(node.style, target.style, base, true);
+    flowStyle(node, target, base, capturing);
+    return target;
+  }
+  function clonePage(board, capturing, base) {
+    const nodes = nodesOf(board);
+    if (nodes.length > maxNodes || !board.matches("section[data-artboard],div[data-artboard],article[data-artboard],main[data-artboard]") || nodes.some((n) => !validTag(n)) || board.querySelector("[data-artboard],[data-stage]")) throw unsupported();
+    const ids = nodes.map((node) => node.id).filter(Boolean);
+    if (new Set(ids).size !== ids.length) throw unsupported();
+    const doc = document.createElement("template").content.ownerDocument;
+    const clone = (node) => {
+      const target = copyNode(node, doc, base, capturing);
+      for (const child of node.childNodes) {
+        if (child.nodeType === Node.ELEMENT_NODE) target.append(clone(child));
+        if (child.nodeType === Node.TEXT_NODE) target.append(doc.createTextNode(child.data));
+      }
+      return target;
+    };
+    return clone(board);
+  }
+  function geometry(board) {
+    const reference = board.getBoundingClientRect();
+    const scaleX = reference.width / board.offsetWidth, scaleY = reference.height / board.offsetHeight;
+    return nodesOf(board).map((node) => {
+      const visible = node.getClientRects().length > 0;
+      const rect = node.getBoundingClientRect();
+      const frame = visible ? [(rect.x - reference.x) / scaleX, (rect.y - reference.y) / scaleY, rect.width / scaleX, rect.height / scaleY] : null;
+      const style2 = getComputedStyle(node);
+      return { frame, paint: visualProperties.map((key) => style2.getPropertyValue(key)) };
+    });
+  }
+  function capturePage(board) {
+    const copy = clonePage(board, true, board.baseURI);
+    const style2 = getComputedStyle(board);
+    for (const key of ["width", "height"]) copy.style.setProperty(key, style2.getPropertyValue(key));
+    const data = JSON.stringify({ version: 1, html: copy.outerHTML, layout: geometry(board) });
+    if (data.length > limit) throw new Error("此页内容过大，无法复制到剪贴板");
+    return data;
+  }
+  function readPage(data) {
+    if (data.length > limit) throw unsupported();
+    const wire = JSON.parse(data);
+    if (wire?.failed) throw new Error("上次复制页面未成功，请重新复制");
+    if (wire?.version !== 1 || typeof wire.html !== "string" || !Array.isArray(wire.layout)) throw unsupported();
+    const template = document.createElement("template");
+    template.innerHTML = wire.html;
+    const board = template.content.firstElementChild;
+    if (!board || template.content.childNodes.length !== 1) throw unsupported();
+    const page = clonePage(board, false, location.protocol === "file:" ? location.href : void 0);
+    if (wire.layout.length !== nodesOf(page).length || wire.layout.some((box) => !box || !Array.isArray(box.paint) || box.paint.length !== visualProperties.length || box.paint.some((value) => typeof value !== "string") || box.frame !== null && (!Array.isArray(box.frame) || box.frame.length !== 4 || box.frame.some((value) => !Number.isFinite(value) || Math.abs(value) > 1e7)))) throw unsupported();
+    return { page, layout: wire.layout };
+  }
+  function verifyPage(board, layout2) {
+    const actual = geometry(board);
+    if (actual.length !== layout2.length || actual.some(({ frame, paint }, i) => {
+      const expected = layout2[i];
+      return paint.some((value, j) => value !== expected.paint[j]) || !!frame !== !!expected.frame || frame?.some((value, j) => !Number.isFinite(value) || Math.abs(value - expected.frame[j]) > 2);
+    })) throw new Error("粘贴会改变此页的布局或样式，已保留目标文件原样");
+  }
+
   // html-design/src/pages.js
   function createPages({
     S,
@@ -3498,7 +3662,8 @@ property of their respective owners.
     writable,
     submit,
     openMenu,
-    closeMenus
+    closeMenus,
+    toast
   }) {
     const listUI = ui.querySelector(".thumb-list"), thumbs = /* @__PURE__ */ new Map(), sizes = /* @__PURE__ */ new WeakMap();
     let renameDraft = null, sizeDraft = null;
@@ -3521,27 +3686,30 @@ property of their respective owners.
       const cs = getComputedStyle(listUI);
       return listUI.clientWidth ? Math.max(80, listUI.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) : 146;
     };
-    function sizeOf(b) {
+    function measure(b, fn) {
       b.setAttribute("data-thumb-measure-target", "");
       root.setAttribute("data-thumb-measuring", "");
       try {
-        return withAll(() => {
-          if (visible(b)) {
-            const v = {
-              w: b.offsetWidth || 1280,
-              h: b.offsetHeight || 720,
-              display: getComputedStyle(b).display
-            };
-            sizes.set(b, v);
-            lastSize = v;
-            return v;
-          }
-          return sizes.get(b) || { ...lastSize, display: "block" };
-        });
+        return withAll(fn);
       } finally {
         root.removeAttribute("data-thumb-measuring");
         b.removeAttribute("data-thumb-measure-target");
       }
+    }
+    function sizeOf(b) {
+      return measure(b, () => {
+        if (visible(b)) {
+          const v = {
+            w: b.offsetWidth || 1280,
+            h: b.offsetHeight || 720,
+            display: getComputedStyle(b).display
+          };
+          sizes.set(b, v);
+          lastSize = v;
+          return v;
+        }
+        return sizes.get(b) || { ...lastSize, display: "block" };
+      });
     }
     const fixCSS = ({ w, h, display }) => `html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:${w}px!important;height:${h}px!important;min-height:0!important}[data-thumb-chain]{display:block!important;position:static!important;transform:none!important;translate:none!important;scale:none!important;margin:0!important;padding:0!important;border:0!important;width:${w}px!important;height:${h}px!important;min-height:0!important;overflow:hidden!important}[data-thumb-target]{display:${display}!important;position:relative!important;inset:auto!important;margin:0!important;transform:none!important;translate:none!important;scale:none!important;opacity:1!important;visibility:visible!important;flex:none!important;width:${w}px!important;height:${h}px!important;box-sizing:border-box!important}*,*::before,*::after{animation:none!important;transition:none!important}`;
     function snapshot(b) {
@@ -4049,6 +4217,80 @@ property of their respective owners.
         cancel: finish
       };
     }
+    const focusedPage = () => {
+      const id = ui.activeElement?.closest(".thumb-main")?.closest(".thumb")?.dataset.pageId;
+      return id && boards().find((b) => b.dataset.artboard === id);
+    };
+    function copyEvent(e) {
+      const b = focusedPage();
+      if (!b || S.playing || !e.clipboardData) return false;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      try {
+        e.clipboardData.setData(PAGE_CLIPBOARD_TYPE, measure(b, () => capturePage(b)));
+        e.clipboardData.setData("text/plain", b.dataset.title || b.dataset.artboard);
+        toast("已复制页面 · 可粘贴到其他文档");
+      } catch (error) {
+        e.clipboardData.setData(PAGE_CLIPBOARD_TYPE, '{"version":1,"failed":true}');
+        toast(error.message, 4500);
+      }
+      return true;
+    }
+    function pasteEvent(e) {
+      const ref = focusedPage();
+      const data = ref && e.clipboardData?.getData(PAGE_CLIPBOARD_TYPE);
+      if (!data) return false;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (!writable()) {
+        toast("当前暂不可操作，请等待同步或 AI 修改结束");
+        return true;
+      }
+      let imported;
+      try {
+        imported = readPage(data);
+      } catch (error) {
+        toast(error instanceof SyntaxError ? "剪贴板页面格式不受支持" : error.message, 4500);
+        return true;
+      }
+      execute([ref], (target2) => {
+        const { page, layout: layout3 } = imported;
+        const previousSequence = stage.getAttribute("data-page-seq");
+        const domIds = [page, ...page.querySelectorAll("[id]")].map((node) => node.id).filter(Boolean);
+        let id;
+        do {
+          id = allocatePage();
+        } while (domIds.some((old) => document.getElementById(`${id}-${old}`)));
+        page.dataset.artboard = id;
+        const used = new Set([...stage.querySelectorAll("[data-el]")].map((el) => el.dataset.el));
+        let n = 0;
+        for (const el of page.querySelectorAll("[data-el]")) {
+          let key2;
+          do {
+            key2 = `${id}-element-${++n}`;
+          } while (used.has(key2));
+          el.dataset.el = key2;
+        }
+        rekeyDOMIds(page, id);
+        let verified = false;
+        transaction(() => {
+          target2.after(page);
+          if (verified) return;
+          try {
+            measure(page, () => verifyPage(page, layout3));
+            verified = true;
+          } catch (error) {
+            page.remove();
+            if (previousSequence === null) stage.removeAttribute("data-page-seq");
+            else stage.setAttribute("data-page-seq", previousSequence);
+            throw error;
+          }
+        }, () => page.remove(), page);
+        thumbs.get(page)?.querySelector(".thumb-main").focus({ preventScroll: true });
+      }).then(() => toast("已粘贴页面 · 可撤销")).catch(() => {
+      });
+      return true;
+    }
     function key(e) {
       const focused = ui.activeElement;
       const active = focused?.closest(".thumb");
@@ -4094,6 +4336,8 @@ property of their respective owners.
       moveStep,
       rename,
       key,
+      copyEvent,
+      pasteEvent,
       openSize,
       sizeKey,
       hasPendingDraft: () => !!renameDraft || !!sizeDraft,
@@ -8315,7 +8559,7 @@ property of their respective owners.
     const outline = `stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"`;
     const filled = `fill="${fill}" ${outline}`;
     const lineStyle = `fill="none" stroke="${stroke}" stroke-width="${Math.max(1, sw)}" stroke-linecap="round" stroke-linejoin="round"`;
-    const geometry = {
+    const geometry2 = {
       rect: `<rect x="${edge}" y="${edge}" width="${width - 2 * edge}" height="${height - 2 * edge}" rx="${radius}" ${filled}/>`,
       ellipse: `<ellipse cx="${midX}" cy="${midY}" rx="${midX - edge}" ry="${midY - edge}" ${filled}/>`,
       triangle: roundedPolygon(`${midX},${edge} ${tipX},${bottom} ${edge},${bottom}`, radius, filled),
@@ -8325,7 +8569,7 @@ property of their respective owners.
       arrow: `<path d="M${edge} ${midY}H${tipX} M${width * (190 - adjust) / 200} ${edge}L${tipX} ${midY}L${width * (190 - adjust) / 200} ${bottom}" ${lineStyle}/>`,
       blockArrow: roundedPolygon(`${edge},${shaftTop} ${headX},${shaftTop} ${headX},${edge} ${tipX},${midY} ${headX},${bottom} ${headX},${shaftBottom} ${edge},${shaftBottom}`, radius, filled)
     };
-    return geometry[kind] || "";
+    return geometry2[kind] || "";
   }
   function renderShape(el, size) {
     const kind = el.dataset.shape;
@@ -9119,9 +9363,9 @@ property of their respective owners.
           if (changedVisual) throw new Error(`手动模式会改变其他内容的位置: ${changedVisual.el.tagName} ${changedVisual.el.id || changedVisual.el.dataset.el || ""}`);
           b.dataset.mode = "artboard";
         } catch (error) {
-          for (const { el, style: style2, flowStyle } of original) {
-            if (flowStyle == null) el.removeAttribute("data-flow-style");
-            else el.setAttribute("data-flow-style", flowStyle);
+          for (const { el, style: style2, flowStyle: flowStyle2 } of original) {
+            if (flowStyle2 == null) el.removeAttribute("data-flow-style");
+            else el.setAttribute("data-flow-style", flowStyle2);
             if (style2 == null) {
               const attr = el.getAttributeNode("style");
               if (attr) el.removeAttributeNode(attr);
@@ -10536,7 +10780,7 @@ property of their respective owners.
         )
       );
       addEventListener("copy", (e) => {
-        if (!crop.active) transfer.copyEvent(e);
+        if (!crop.active && !pages.copyEvent(e)) transfer.copyEvent(e);
       }, true);
       addEventListener("cut", (e) => {
         if (!crop.active && transfer.cutEvent(e)) {
@@ -10545,7 +10789,7 @@ property of their respective owners.
         }
       }, true);
       addEventListener("paste", (e) => {
-        if (!crop.active) transfer.pasteEvent(e);
+        if (!crop.active && !pages.pasteEvent(e)) transfer.pasteEvent(e);
       }, true);
       addEventListener(
         "paste",
@@ -11285,7 +11529,8 @@ property of their respective owners.
           }
         },
         openMenu,
-        closeMenus
+        closeMenus,
+        toast
       });
       const sizeOf = (b) => pages.sizeOf(b), paint = (b) => pages.paint(b), buildNav = () => pages.build();
       const dirty = /* @__PURE__ */ new Set();

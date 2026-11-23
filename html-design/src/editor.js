@@ -1889,14 +1889,14 @@ import {
       ),
     );
 
-    addEventListener('copy',e=>{if(!crop.active)transfer.copyEvent(e);},true);
+    addEventListener('copy', e => { if (!crop.active && !pages.copyEvent(e)) transfer.copyEvent(e); }, true);
     addEventListener('cut',e=>{
       if (!crop.active && transfer.cutEvent(e)) {
         removeEl(S.sel);
         toast('已剪切元素 · 可撤销');
       }
     },true);
-    addEventListener('paste',e=>{if(!crop.active)transfer.pasteEvent(e);},true);
+    addEventListener('paste', e => { if (!crop.active && !pages.pasteEvent(e)) transfer.pasteEvent(e); }, true);
     addEventListener(
       "paste",
       (e) => {
@@ -2623,6 +2623,7 @@ import {
       },
       openMenu,
       closeMenus,
+      toast,
     });
     const sizeOf = (b) => pages.sizeOf(b),
       paint = (b) => pages.paint(b),
