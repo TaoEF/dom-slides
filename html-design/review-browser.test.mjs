@@ -90,14 +90,14 @@ test('D01/D04/F04: viewer can read sanitized before; scripts/navigation/forms ca
   await viewer.locator('.review-trigger').click();
   assert.ok(await viewer.locator('[data-review-command=accept-all]').isEnabled());
   let viewerWrites = 0; viewer.on('request', r => { if (/document\/review\/(undo|accept)$/.test(r.url())) viewerWrites++; });
-  await viewer.locator('.review-actions [data-review-command=undo]').focus();
+  await viewer.locator('.review-panel:not([hidden]) [data-review-id=document][data-review-command=undo]').focus();
   assert.equal(viewerWrites, 0, 'focus alone must never write or take editing permission');
   const frame = viewer.frameLocator('iframe[title="AI 修改前，只读预览"]');
   await frame.locator('[data-el=p1-title]').waitFor();
   assert.equal(await frame.locator('script,iframe,object,form,meta[http-equiv=refresh],[onclick],[autofocus]').count(), 0);
   assert.equal(await viewer.evaluate(() => window.baselineRan), undefined);
   assert.equal(await f.page.evaluate(() => window.baselineRan), undefined);
-  await f.show(); await f.page.locator('.review-actions [data-review-command=undo]').focus();
+  await f.show(); await f.action('document', 'undo').focus();
   await f.page.locator('[data-act=export]').evaluate(n => n.click());
   const event = f.page.waitForEvent('download'); await f.page.locator('[data-act=download]').evaluate(n => n.click());
   const download = await event, downloaded = await readFile(await download.path(), 'utf8');
