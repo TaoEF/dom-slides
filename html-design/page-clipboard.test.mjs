@@ -16,7 +16,7 @@ const shape = shapeMarkup({id:'arrow',kind:'triangle',width:70,height:50,strokeW
 const fixture = (css, pages) => `<!doctype html><html><head><meta charset="utf-8"><title>Page clipboard</title>
 <style>body{margin:0}[data-stage]{display:flex;flex-direction:column}.slide{box-sizing:border-box;width:800px;height:450px;padding:30px;position:relative}${css}</style>
 </head><body><main data-stage>${pages}</main><script data-editor>${editor}</script></body></html>`;
-const title = '<h1 id="heading" data-el="title">Reusable title</h1>';
+const title = '<h1 id="heading" data-el="title" spellcheck="false">Reusable title</h1>';
 const sourceCSS = '.slide{--ink:#164056;background:#edf7fa}#p1-heading,#heading{color:var(--ink);font:40px/1.2 Arial;margin:0}figure{width:160px;margin:0}img{display:block;width:100%;height:75px;object-fit:cover}';
 const sourcePage = slide('p1','Source',title + '<figure><img data-el="photo" src="./art.svg" alt="Photo"></figure>' + shape +
   '<svg width="25" height="25"><defs><clipPath id="clip"><circle cx="10" cy="10" r="8"/></clipPath></defs><rect width="25" height="25" clip-path="url(#clip)"/></svg>' +
@@ -30,6 +30,7 @@ before(async () => {
   await writeFile(join(root,'source/art.svg'),image);
   await writeFile(join(root,'source/deck.html'),fixture(sourceCSS, sourcePage + slide('p2','Other','<h1 data-el="other">Other page</h1>')));
   await writeFile(join(root,'receiver/deck.html'),fixture('.slide{background:#dadada}h1{color:#a21;font:20px Georgia}',receiverPage));
+  await writeFile(join(root,'receiver/blocked.html'),fixture('img{object-fit:contain!important}',receiverPage));
   server = await createPreviewServer({root,port:0});
   origin = `http://127.0.0.1:${server.address().port}`;
   browser = await chromium.launch(browserOptions());
@@ -84,10 +85,11 @@ test('real cross-file clipboard preserves layout, local image paths, editable DO
       return [b.dataset.mode,b.offsetWidth,b.offsetHeight,getComputedStyle(b).backgroundColor,getComputedStyle(h).color,getComputedStyle(h).fontSize,h.id,a.getAttribute('href'),a.getAttribute('aria-labelledby'),rect.getAttribute('clip-path')];
     }),['flow',800,450,'rgb(237, 247, 250)','rgb(22, 64, 86)','40px','p2-heading','#p2-heading','p2-heading','url("#p2-clip")']);
     const photo = pasted.locator('img');
-    assert.equal(await photo.getAttribute('src'),origin+'/source/art.svg');
+    assert.equal(await photo.getAttribute('src'),'/source/art.svg');
     await photo.evaluate(img => img.decode());
     assert.equal(await pasted.locator('svg[data-shape=triangle]').count(),1);
-    assert.match(await readFile(join(root,'receiver/deck.html'),'utf8'),/p2-heading/);
+    await target.getByText('已粘贴页面 · 可撤销',{exact:true}).waitFor();
+    assert.ok((await readFile(join(root,'receiver/deck.html'),'utf8')).includes('id="p2-heading"'));
     await target.reload();
     await thumb(target,'p2').click();
     await target.locator('[data-act=edit]').click();
@@ -116,5 +118,23 @@ test('invalid page clipboard does not insert or execute content', async () => {
     assert.equal(await page.locator('[data-artboard]').count(),before);
     assert.equal(await page.evaluate(()=>window.pageClipboardRan),undefined);
     assert.match(await getToast(page),/暂不支持整页复制/);
+  } finally { await c.close(); }
+});
+
+
+test('conflicting target image fit is rejected before writing the new page', async () => {
+  const c = await browser.newContext();
+  try {
+    const source = await open(c,'/source/deck.html');
+    const target = await open(c,'/receiver/blocked.html');
+    const file = join(root,'receiver/blocked.html');
+    const before = await readFile(file,'utf8');
+    await source.bringToFront();
+    await copy(source,'p1');
+    await target.bringToFront();
+    await paste(target,'p1');
+    await target.locator('.toast').filter({hasText:'粘贴会改变此页的布局或样式'}).waitFor();
+    assert.equal(await target.locator('[data-artboard]').count(),1);
+    assert.ok((await readFile(file,'utf8')) === before);
   } finally { await c.close(); }
 });

@@ -3489,10 +3489,10 @@ property of their respective owners.
   var svgTags = new Set("svg g path rect circle ellipse line polyline polygon text tspan defs clippath mask lineargradient radialgradient stop pattern marker symbol use image title desc".split(" "));
   var cssProperty = /^(?:width|height|(?:min-|max-)?(?:width|height|inline-size|block-size)|display|position|(?:top|right|bottom|left)|inset(?:-.+)?|box-sizing|aspect-ratio|margin(?:-.+)?|padding(?:-.+)?|border(?:-(?!image).+)?|overflow(?:-[xy])?|opacity|visibility|color|background(?:-.+)?|box-shadow|outline(?:-.+)?|font(?:-.+)?|line-height|letter-spacing|word-spacing|(?:text|white-space)(?:-.+)?|overflow-wrap|word-break|hyphens|vertical-align|direction|writing-mode|flex(?:-.+)?|grid(?:-.+)?|(?:row-|column-)?gap|(?:align|justify|place)(?:-.+)?|order|table-layout|border-collapse|border-spacing|caption-side|empty-cells|object-(?:fit|position)|list-style(?:-.+)?|transform(?:-.+)?|translate|rotate|scale|z-index|isolation|mix-blend-mode|filter|backdrop-filter|clip-path|(?:-webkit-)?mask(?:-.+)?|fill(?:-.+)?|stroke(?:-.+)?|paint-order|vector-effect|stop-color|stop-opacity|dominant-baseline|alignment-baseline|baseline-shift|text-anchor|marker-(?:start|mid|end)|d|cx|cy|r|rx|ry|x|y)$/;
   var preserveAuto = /^(?:(?:min-|max-)?(?:width|height|inline-size|block-size)|top|right|bottom|left|margin(?:-.+)?|(?:padding|inset)-.+|grid-template-(?:columns|rows)|flex-basis)$/;
-  var visualProperties = ["display", "color", "background-color", "font-family", "font-size", "font-weight", "white-space", "visibility"];
+  var visualProperties = ["display", "color", "background-color", "font-family", "font-size", "font-weight", "white-space", "visibility", "object-fit", "object-position", "opacity", "line-height"];
   var transient = /^(?:contenteditable|data-bbox|data-editor(?:-|$)|data-thumb(?:-|$)|data-qa-.*)$/;
   var urlAttributes = /* @__PURE__ */ new Set(["href", "xlink:href", "src"]);
-  var plainAttributes = /^(?:id|class|title|lang|dir|alt|role|aria-[\w-]+|colspan|rowspan|scope|headers|span|start|reversed|value|width|height|viewbox|preserveaspectratio|[dc]?x[12]?|[dc]?y[12]?|r[xy]?|d|points|pathlength|transform|opacity|(?:fill|stroke)(?:-[\w-]+)?|clip-path|clip-rule|mask|vector-effect|text-anchor|dominant-baseline|alignment-baseline|baseline-shift|(?:offset|stop-(?:color|opacity))|(?:gradient|pattern|mask|clipPath)[\w-]+|fx|fy|fr|lengthadjust|textlength|marker[\w-]+|orient|ref[xy]|xmlns(?::xlink)?)$/i;
+  var plainAttributes = /^(?:id|class|title|lang|dir|alt|role|spellcheck|autocapitalize|translate|aria-[\w-]+|colspan|rowspan|scope|headers|span|start|reversed|value|width|height|viewbox|preserveaspectratio|[dc]?x[12]?|[dc]?y[12]?|r[xy]?|d|points|pathlength|transform|opacity|(?:fill|stroke)(?:-[\w-]+)?|clip-path|clip-rule|mask|vector-effect|text-anchor|dominant-baseline|alignment-baseline|baseline-shift|(?:offset|stop-(?:color|opacity))|(?:gradient|pattern|mask|clipPath)[\w-]+|fx|fy|fr|lengthadjust|textlength|marker[\w-]+|orient|ref[xy]|xmlns(?::xlink)?)$/i;
   var dataAttributes = /^data-(?:artboard|title|mode|el|flow-style|text-box|(?:shape|crop|group)(?:-[\w-]+)?)$/;
   function unsupported() {
     return new Error("此页含有暂不支持整页复制的内容");
@@ -3511,7 +3511,11 @@ property of their respective owners.
     }
     if (kind === "local") throw unsupported();
     const url = new URL(value, base);
-    if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password) return url.href;
+    if (["https:", "http:"].includes(url.protocol) && !url.username && !url.password) {
+      if (!base && kind === "image" && url.origin === location.origin && new URL(document.baseURI).origin === location.origin && !url.pathname.startsWith("//"))
+        return url.pathname + url.search + url.hash;
+      return url.href;
+    }
     if (kind === "image" && /^data:image\/(?:png|gif|jpe?g|webp|avif|svg\+xml|bmp|x-icon)[;,]/i.test(url.href)) return url.href;
     if (base && url.protocol === "file:" && base.startsWith("file:")) return url.href;
     if (kind === "link" && ["mailto:", "tel:"].includes(url.protocol)) return url.href;
@@ -3608,12 +3612,18 @@ property of their respective owners.
   function geometry(board) {
     const reference = board.getBoundingClientRect();
     const scaleX = reference.width / board.offsetWidth, scaleY = reference.height / board.offsetHeight;
+    const frameOf = (rect) => [(rect.x - reference.x) / scaleX, (rect.y - reference.y) / scaleY, rect.width / scaleX, rect.height / scaleY];
+    const range = document.createRange();
     return nodesOf(board).map((node) => {
       const visible = node.getClientRects().length > 0;
-      const rect = node.getBoundingClientRect();
-      const frame = visible ? [(rect.x - reference.x) / scaleX, (rect.y - reference.y) / scaleY, rect.width / scaleX, rect.height / scaleY] : null;
+      const frame = visible ? frameOf(node.getBoundingClientRect()) : null;
+      const text = visible ? [...node.childNodes].flatMap((child) => {
+        if (child.nodeType !== Node.TEXT_NODE || !child.data.trim()) return [];
+        range.selectNodeContents(child);
+        return [...range.getClientRects()].filter((rect) => rect.width && rect.height).map(frameOf);
+      }) : [];
       const style2 = getComputedStyle(node);
-      return { frame, paint: visualProperties.map((key) => style2.getPropertyValue(key)) };
+      return { frame, text, paint: visualProperties.map((key) => style2.getPropertyValue(key)) };
     });
   }
   function capturePage(board) {
@@ -3634,14 +3644,16 @@ property of their respective owners.
     const board = template.content.firstElementChild;
     if (!board || template.content.childNodes.length !== 1) throw unsupported();
     const page = clonePage(board, false, location.protocol === "file:" ? location.href : void 0);
-    if (wire.layout.length !== nodesOf(page).length || wire.layout.some((box) => !box || !Array.isArray(box.paint) || box.paint.length !== visualProperties.length || box.paint.some((value) => typeof value !== "string") || box.frame !== null && (!Array.isArray(box.frame) || box.frame.length !== 4 || box.frame.some((value) => !Number.isFinite(value) || Math.abs(value) > 1e7)))) throw unsupported();
+    const frameOK = (frame) => Array.isArray(frame) && frame.length === 4 && frame.every((value) => Number.isFinite(value) && Math.abs(value) <= 1e7);
+    if (wire.layout.length !== nodesOf(page).length || wire.layout.some((box) => !box || !Array.isArray(box.paint) || box.paint.length !== visualProperties.length || box.paint.some((value) => typeof value !== "string") || box.frame !== null && !frameOK(box.frame) || !Array.isArray(box.text) || !box.text.every(frameOK))) throw unsupported();
     return { page, layout: wire.layout };
   }
   function verifyPage(board, layout2) {
     const actual = geometry(board);
-    if (actual.length !== layout2.length || actual.some(({ frame, paint }, i) => {
+    const differs = (frame, expected) => !!frame !== !!expected || frame?.some((value, j) => !Number.isFinite(value) || Math.abs(value - expected[j]) > 2);
+    if (actual.length !== layout2.length || actual.some(({ frame, paint, text }, i) => {
       const expected = layout2[i];
-      return paint.some((value, j) => value !== expected.paint[j]) || !!frame !== !!expected.frame || frame?.some((value, j) => !Number.isFinite(value) || Math.abs(value - expected.frame[j]) > 2);
+      return paint.some((value, j) => value !== expected.paint[j]) || differs(frame, expected.frame) || text.length !== expected.text.length || text.some((line, j) => differs(line, expected.text[j]));
     })) throw new Error("粘贴会改变此页的布局或样式，已保留目标文件原样");
   }
 
