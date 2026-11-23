@@ -1,3 +1,4 @@
+import { makeLineArrow, minArrowLength, readLineArrow, setLineArrow } from "./line-arrow.js";
 import { createWorkspaceTransfer } from "./workspace-transfer.js";
 import { paintedDiv } from "./painted-container.js";
 import { portableHTML } from "./portable-html.js";
@@ -82,6 +83,7 @@ import {
         html[data-editor-single] [data-artboard]:not([data-editor-current]){display:none!important}
         html[data-thumb-measuring] [data-stage]{display:block!important}
         html[data-thumb-measuring] [data-artboard]:not([data-thumb-measure-target]){display:none!important}
+        html[data-editor-arrow] [data-artboard],html[data-editor-arrow] [data-artboard] *{cursor:crosshair!important}
         html[data-editor-panning] [data-stage],html[data-editor-panning] [data-stage] *{cursor:grab!important}
       }
       @media print{html[data-editor-on],html[data-editor-on] body{padding:0!important;overflow:visible!important}[data-artboard]{break-after:page;break-inside:avoid}}
@@ -339,7 +341,7 @@ import {
     }
     function setEditing(on) {
       if (on && persistence && !persistence.canEdit()) return;
-      if (!on) finishAllShapeParams();
+      if (!on) { finishAllShapeParams(); disarmLineArrow(); }
       S.editing = on;
       root.toggleAttribute("data-editing", on);
       host.toggleAttribute("data-editing", on);
@@ -569,6 +571,8 @@ import {
             v ? el.setAttribute("style", v) : el.removeAttribute("style");
             delete el.dataset.flowStyle;
           });
+          if (getComputedStyle(b).position === 'static' && b.querySelector(':scope > svg[data-shape-endpoints]'))
+            b.style.position = 'relative';
           b.dataset.mode = "flow";
         },
         b,
@@ -702,6 +706,18 @@ import {
       drawSel();
       syncBar();
     }
+    const arrowHandles = [...ui.querySelectorAll('[data-arrow-end]')];
+    function arrowPoint(el, point) {
+      return new DOMPoint(point.x, point.y).matrixTransform(el.getScreenCTM());
+    }
+    function drawArrowHandles(el, points) {
+      arrowHandles.forEach((handle, index) => {
+        handle.hidden = !points || !S.editing || S.playing;
+        if (handle.hidden) return;
+        const {x, y} = arrowPoint(el, points[index]);
+        Object.assign(handle.style, {left: `${x}px`, top: `${y}px`});
+      });
+    }
     function drawSel() {
       if (S.group && (!S.group.isConnected || S.group.closest("[data-artboard]") !== S.current)) S.group = null;
       crop.refresh();
@@ -711,7 +727,9 @@ import {
       S.sel = S.selection.at(-1) || null;
       selectionOverlay.draw(S.selection);
       const el = S.sel;
-      if (!el || !el.isConnected || !visible(el)) selBox.style.display = "none";
+      const drawnArrow = S.selection.length === 1 && el?.isConnected && readLineArrow(el);
+      drawArrowHandles(el, drawnArrow);
+      if (!el || !el.isConnected || !visible(el) || drawnArrow) selBox.style.display = "none";
       else {
         const r = unionRect(S.selection), frame = selectionFrame(S.selection,selectionDirection.angle);
         const width = frame ? frame.width : r.width, height = frame ? frame.height : r.height;
@@ -1261,9 +1279,94 @@ import {
       s.removeAllRanges();
       s.addRange(r);
     }
+    function disarmLineArrow() {
+      root.removeAttribute('data-editor-arrow');
+    }
+    function armLineArrow() {
+      endText();
+      select(null);
+      root.setAttribute('data-editor-arrow', '');
+      toast('拖动绘制线箭头 · Esc 取消');
+    }
+    function startLineArrow(e, board) {
+      disarmLineArrow();
+      if (e.button !== 0 || !board || !canMutate()) return;
+      const g = elementGeometry(board);
+      if (!g.supported) return toast('这个画布暂不支持绘制线箭头');
+      const cs = getComputedStyle(board);
+      const origin = mappedDelta(g.matrix, -g.w / 2 + parseFloat(cs.borderLeftWidth), -g.h / 2 + parseFloat(cs.borderTopWidth));
+      origin.x += g.cx; origin.y += g.cy;
+      const point = event => inverseDelta(g.matrix, event.clientX - origin.x, event.clientY - origin.y);
+      const start = point(e), preview = makeLineArrow();
+      const {a, b, c, d} = g.matrix;
+      Object.assign(preview.style, {
+        position: 'fixed', transformOrigin: '0 0', transform: `matrix(${a},${b},${c},${d},0,0)`,
+      });
+      preview.setAttribute('class', 'arrow-preview');
+      preview.setAttribute('aria-hidden', 'true');
+      const farEnough = end => Math.hypot(end.x - start.x, end.y - start.y) >= minArrowLength;
+      S.drag = {
+        move(event) {
+          if (event.pointerId !== e.pointerId) return;
+          const end = point(event);
+          if (!farEnough(end)) { preview.remove(); return; }
+          const corner = setLineArrow(preview, start, end);
+          const offset = mappedDelta(g.matrix, corner.x, corner.y);
+          Object.assign(preview.style, {left: `${origin.x + offset.x}px`, top: `${origin.y + offset.y}px`});
+          ui.append(preview);
+        },
+        up(event) {
+          preview.remove();
+          if (!event || event.pointerId !== e.pointerId || !board.isConnected || !canMutate()) return;
+          const end = point(event);
+          if (!farEnough(end)) return;
+          const arrow = makeLineArrow(), corner = setLineArrow(arrow, start, end);
+          arrow.dataset.el = elementId(board, 'shape');
+          setPos(arrow, {abs: true}, corner.x, corner.y);
+          if (getComputedStyle(board).position !== 'static') insertEl(arrow, board, null);
+          else {
+            const before = snap([board]);
+            const redo = () => { board.style.position = 'relative'; board.append(arrow); };
+            redo();
+            push({board, redo, undo() { arrow.remove(); apply(before); }});
+          }
+          select(arrow);
+        },
+        cancel() { preview.remove(); },
+      };
+    }
+    function startArrowEndpoint(e, index) {
+      const el = S.sel, points = readLineArrow(el);
+      if (e.button !== 0 || S.selection.length !== 1 || !points || !canMutate()) return;
+      const geometry = elementGeometry(el);
+      if (!geometry.supported) return toast('这种变换暂不支持编辑线箭头端点');
+      const b = el.closest('[data-artboard]'), position = getPos(el), before = snap([el], true);
+      const inverse = el.getScreenCTM().inverse();
+      const fixed = arrowPoint(el, points[1 - index]), grabbed = arrowPoint(el, points[index]);
+      let moved = false;
+      S.drag = {
+        move(event) {
+          if (event.pointerId !== e.pointerId || Math.hypot(event.clientX - e.clientX, event.clientY - e.clientY) < 3 && !moved) return;
+          const movedPoint = new DOMPoint(grabbed.x + event.clientX - e.clientX, grabbed.y + event.clientY - e.clientY).matrixTransform(inverse);
+          if (Math.hypot(movedPoint.x - points[1 - index].x, movedPoint.y - points[1 - index].y) < minArrowLength) return;
+          const ends = [...points];
+          ends[index] = movedPoint;
+          setLineArrow(el, ...ends);
+          setPos(el, position, position.x, position.y);
+          const opposite = arrowPoint(el, readLineArrow(el)[1 - index]);
+          const delta = inverseDelta(geometry.parent, fixed.x - opposite.x, fixed.y - opposite.y);
+          setPos(el, position, position.x + delta.x, position.y + delta.y);
+          moved = true;
+          drawSel();
+        },
+        up() { if (moved) commit(before, b); },
+        cancel() { apply(before); drawSel(); },
+      };
+    }
     function addShape(kind) {
       const b = activeBoard();
       if (!b || !visible(b) || !persistence?.canEdit()) return;
+      if (kind === 'arrow') { armLineArrow(); return; }
       endText();
       const el = makeShape(kind, elementId(b, 'shape'));
       if (!el) return;
@@ -1535,7 +1638,7 @@ import {
       $(".image-tools").hidden = !image;
       const shape = !multi && el.matches('svg[data-shape]');
       $(".shape-tools").hidden = !shape;
-      $('.shape-more-section').hidden = !shape || !shapeHasAdjust(el.dataset.shape);
+      $('.shape-more-section').hidden = !shape || !shapeHasAdjust(el.dataset.shape) || !!readLineArrow(el);
       if (shape) {
         for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust, radius: el.dataset.shapeRadius ?? (el.dataset.shape === 'rect' ? el.dataset.shapeAdjust : '0') })) {
           const input = $(`[data-shape-prop=${prop}]`);
@@ -1647,6 +1750,7 @@ import {
             ui.activeElement?.matches("[aria-expanded=true]"))
         )
           return;
+        if (e.key === 'Escape' && root.hasAttribute('data-editor-arrow')) { disarmLineArrow(); e.preventDefault(); return; }
         if (crop.active && e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); runAction('crop-cancel'); return; }
         if (e.key === "Escape" && S.drag?.cancel) {
           S.drag.cancel();
@@ -1803,6 +1907,14 @@ import {
           crop.finish(); endText(); select(null); setCurrent(clickedBoard); markActive(); syncBar();
         }
         if (!S.editing) return;
+        if (root.hasAttribute('data-editor-arrow')) {
+          if (!clickedBoard) { disarmLineArrow(); return; }
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          ui.activeElement?.blur();
+          startLineArrow(e, clickedBoard);
+          return;
+        }
         if (!inStage(e.target)) {
           endText();
           const v = viewport.bounds();
@@ -1947,6 +2059,12 @@ import {
       if (e.target.closest("button")) e.preventDefault();
     }); // 点按钮不抢走文字焦点
     ui.addEventListener("pointerdown", (e) => {
+      const endpoint = e.target.closest?.('[data-arrow-end]');
+      if (endpoint) {
+        e.preventDefault();
+        startArrowEndpoint(e, Number(endpoint.dataset.arrowEnd));
+        return;
+      }
       const h = e.target.closest?.("[data-h]");
       if (h && S.sel && S.editing) {
         e.preventDefault();
@@ -2319,6 +2437,7 @@ import {
       if (act==='group' && groupProblem(selectionRoots(S.selection))) return false;
       if (act==='ungroup' && (S.selection.length!==1 || !isGroup(S.sel))) return false;
       if (crop.active && !["crop-done", "crop-cancel", "undo", "redo", "image-crop", "zoom-in", "zoom-out", "zoom-reset", "zoom-fit"].includes(act)) crop.finish();
+      if (act !== "shape-insert") disarmLineArrow();
       ACTS[act]?.(btn);
       return true;
     }
@@ -2557,6 +2676,7 @@ import {
       );
     }
     function goTo(b) {
+      disarmLineArrow();
       const list = boards(),
         i = list.indexOf(b);
       crop.finish(); endText();

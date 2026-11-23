@@ -166,6 +166,21 @@ export function collectEditableSlide(board) {
       emit(el, { kind: 'image', ...box, name, source: el.currentSrc || el.src, naturalWidth: el.naturalWidth, naturalHeight: el.naturalHeight, fit: cs.objectFit, opacity: Number(cs.opacity), href: el.closest('a')?.href });
     } else if (el.matches('svg[data-shape]')) {
       const kind = el.dataset.shape;
+      const endpoints = el.dataset.shapeEndpoints?.trim().split(/\s+/).map(Number);
+      if (kind === 'arrow' && endpoints?.length === 4 && endpoints.every(Number.isFinite)) {
+        const matrix = el.getScreenCTM();
+        if (matrix) {
+          const [x1, y1, x2, y2] = endpoints;
+          const a = new DOMPoint(x1, y1).matrixTransform(matrix);
+          const b = new DOMPoint(x2, y2).matrixTransform(matrix);
+          const ink = el.querySelector('[data-shape-ink]') || el.lastElementChild || el;
+          const stroke = getComputedStyle(ink);
+          const width = parseFloat(stroke.strokeWidth) * Math.hypot(matrix.a, matrix.b);
+          emit(el, {kind: 'line', points: [a.x - origin.left, a.y - origin.top, b.x - a.x, b.y - a.y],
+            width, color: cssColor(stroke.stroke), endArrowType: 'arrow', name});
+          continue;
+        }
+      }
       const native = { rect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', diamond: 'diamond', star: 'star5', line: 'line', arrow: 'line', blockArrow: 'rightArrow' }[kind];
       const view = el.viewBox.baseVal;
       const radiusScale = view.width && view.height ? Math.min(box.w / view.width, box.h / view.height) : 1;
@@ -319,8 +334,8 @@ export async function addEditableSlide({ pptx, slide, data, page, board, context
       // by translating to the minimum corner and flipping the normalized path.
       slide.addShape(pptx.ShapeType.line, {
         x: px(Math.min(x, x + w)), y: px(Math.min(y, y + h)), w: px(Math.abs(w)), h: px(Math.abs(h)),
-        flipH: w < 0, flipV: h < 0, objectName: `${item.name}-border`,
-        line: { color: item.color.color, transparency: item.color.transparency, width: pt(item.width) },
+        flipH: w < 0, flipV: h < 0, objectName: item.endArrowType ? item.name : `${item.name}-border`,
+        line: { color: item.color.color, transparency: item.color.transparency, width: pt(item.width), endArrowType: item.endArrowType },
       });
     } else if (item.kind === 'text') {
       // Explicit segments avoid PptxGenJS treating a trailing newline in a rich run

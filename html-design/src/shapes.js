@@ -1,3 +1,5 @@
+import { readLineArrow, renderLineArrow } from "./line-arrow.js";
+
 const NS = 'http://www.w3.org/2000/svg';
 export const SHAPE_NAMES = {
   rect: '矩形', ellipse: '椭圆', triangle: '三角形', diamond: '菱形',
@@ -71,6 +73,8 @@ export function shapeMarkup({ id, kind, fill = '#86868b', stroke = '#86868b', st
 
 // Geometry is materialized in the saved SVG. There is no script-time reconstruction.
 export function renderShape(el, size) {
+  const endpoints = readLineArrow(el);
+  if (endpoints) return renderLineArrow(el, endpoints);
   const kind = el.dataset.shape;
   const defaults = dimensions(kind);
   const style = el.isConnected ? getComputedStyle(el) : el.style;

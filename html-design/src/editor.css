@@ -1108,3 +1108,23 @@ button[aria-disabled=true] { opacity:.45; cursor:default; }
 .size-heading,.size-fields,.size-actions{display:flex;align-items:center;gap:12px}.size-heading h2{font-size:17px;margin:0;flex:1}.size-close{padding:0;width:28px}.size-page{color:#646464;margin:4px 0 20px}.size-box label{display:block;flex:1;min-width:0}.size-box select,.size-box input{box-sizing:border-box;width:100%;margin:6px 0 16px;padding:9px 10px;background:#f2f2f2;border:0;border-radius:6px;color:#202020;font:inherit}.size-fields label{position:relative}.size-fields input{padding-right:30px}.size-fields span{position:absolute;right:10px;top:35px;color:#646464}.size-note{font-size:12px;color:#646464;margin:0 0 20px}.size-error{font-size:12px;color:#b42318}.size-actions{justify-content:flex-end}.size-actions button{padding-inline:14px}.size-box :focus-visible{outline:2px solid #258bff;outline-offset:2px}
 .workspace-switch{flex-shrink:0;margin-inline:auto;background:#e8e8e8}.workspace-switch button{font-size:12px;padding:4px 9px;min-width:0}.workspace-switch [aria-pressed=true]{background:#fff;color:#202020}.workspace-label{position:fixed;height:24px;min-height:24px;justify-content:flex-start;padding:0;background:transparent;font-size:11px;color:#646464;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:auto}.workspace-label:hover{background:transparent;color:#202020}.workspace-ghost{position:fixed;inset:0;pointer-events:none;z-index:2147483641}.workspace-ghost *{pointer-events:none!important}.workspace-labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}
 @media(max-width:760px){:host([data-workspace-enabled]) .page-title{display:none}:host([data-workspace-enabled]) .footer{gap:2px}:host([data-workspace-enabled]) .workspace-switch button{padding-inline:6px;font-size:11px}}
+
+.arrow-end {
+  position: fixed;
+  z-index: 2147483645;
+  width: 11px;
+  height: 11px;
+  border: 1px solid var(--selection);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 1px #ffffff80;
+  transform: translate(-50%, -50%);
+  cursor: crosshair;
+  pointer-events: auto;
+}
+.arrow-preview, .arrow-preview * {
+  pointer-events: none !important;
+}
+.arrow-preview {
+  z-index: 2147483643;
+}

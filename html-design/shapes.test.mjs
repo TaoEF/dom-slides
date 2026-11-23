@@ -23,6 +23,19 @@ after(async () => {
 
 const shell = content => `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0}[data-artboard]{width:800px;height:450px;background:#fff;padding:30px;box-sizing:border-box}</style></head><body><main data-stage><section data-artboard="p1" data-title="形状" data-mode="artboard">${content}</section></main></body></html>`;
 
+async function drag(p, from, to) {
+  await p.mouse.move(from.x, from.y);
+  await p.mouse.down();
+  await p.mouse.move(to.x, to.y, {steps: 5});
+  await p.mouse.up();
+}
+async function drawArrow(p, start = [.65, .7], end = [.32, .35]) {
+  const b = await p.locator('[data-artboard=p1]').boundingBox();
+  const point = ([x, y]) => ({x: b.x + b.width * x, y: b.y + b.height * y});
+  await drag(p, point(start), point(end));
+  return {start: point(start), end: point(end)};
+}
+
 test('shape palette inserts eight persistent, individually editable elements; parameters undo and reopen', async () => {
   const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
@@ -38,6 +51,7 @@ test('shape palette inserts eight persistent, individually editable elements; pa
       assert.equal(await p.locator('[data-menu=shape] button').count(), 8);
       assert.equal((await p.locator('[data-menu=shape]').innerText()).trim(), '');
       await p.locator(`[data-act=shape-insert][data-shape-kind=${kind}]`).click();
+      if (kind === 'arrow') await drawArrow(p);
     }
     const shapes = p.locator('[data-artboard=p1] svg[data-shape]');
     assert.equal(await shapes.count(), 8);
@@ -104,7 +118,9 @@ test('every inserted shape responds to its visible controls', async () => {
     for (const kind of ['rect', 'ellipse', 'triangle', 'diamond', 'star', 'line', 'arrow', 'blockArrow']) {
       await p.locator('[data-act=add-shape]').click();
       await p.locator(`[data-shape-kind=${kind}]`).click();
+      if (kind === 'arrow') await drawArrow(p);
       const shape = p.locator(`svg[data-shape=${kind}]`);
+      const ink = shape.locator(kind === 'arrow' ? '[data-shape-ink]' : ':scope > *');
       assert.ok(await p.locator('.shape-tools').isVisible(), `${kind} controls visible`);
       if (kind !== 'line' && kind !== 'arrow') {
         const gap = await shape.evaluate(n => {
@@ -118,10 +134,10 @@ test('every inserted shape responds to its visible controls', async () => {
       await p.locator('[data-palette-custom]').click();
       await p.locator('.palette-hex').fill('#ef4444');
       await p.locator('.palette-hex-form button').click();
-      assert.equal(await shape.locator(':scope > *').getAttribute('stroke'), '#EF4444', `${kind} stroke`);
+      assert.equal(await ink.getAttribute('stroke'), '#EF4444', `${kind} stroke`);
       await p.locator('[data-shape-prop=width]').fill('5');
-      assert.equal(await shape.locator(':scope > *').getAttribute('stroke-width'), '5', `${kind} width`);
-      assert.equal(await shape.locator(':scope > *').getAttribute('vector-effect'), null, `${kind} stroke follows canvas zoom`);
+      assert.equal(await ink.getAttribute('stroke-width'), '5', `${kind} width`);
+      assert.equal(await ink.getAttribute('vector-effect'), null, `${kind} stroke follows canvas zoom`);
       if (kind !== 'line' && kind !== 'arrow') {
         await p.locator('[data-act=shape-fill-color]').click();
         await p.locator('[data-palette-custom]').click();
@@ -137,7 +153,7 @@ test('every inserted shape responds to its visible controls', async () => {
         assert.notEqual(await shape.innerHTML(), before, `${kind} rounded contour previews`);
         await p.locator('[data-shape-prop=radius]').dispatchEvent('change');
       }
-      if (['star', 'arrow', 'blockArrow'].includes(kind)) {
+      if (['star', 'blockArrow'].includes(kind)) {
         const before = await shape.innerHTML();
         await shape.dispatchEvent('contextmenu', { button: 2 });
         assert.equal(await p.locator('[data-menu=element]').isVisible(), true);
@@ -297,4 +313,94 @@ test('PPTX exports inserted primitives as native editable shapes, without raster
   const widthOf = index => Number(native.find(s => s.includes(`name="p1-shape-${index}"`)).match(/<a:ext cx="(\d+)"/)[1]) / 9525;
   assert.ok(widthOf(2) > 179 && widthOf(2) < 181, `line arrow uses its editable frame: ${widthOf(2)}`);
   assert.ok(widthOf(4) > 179 && widthOf(4) < 181, `star uses its editable frame: ${widthOf(4)}`);
+});
+
+
+test('drawn arrow endpoints are independent, with fixed ink geometry and one undo per gesture', async () => {
+  const p = await browser.newPage({viewport:{width:1440,height:900}});
+  const errors = [];
+  p.on('pageerror', e => errors.push(e.message));
+  const arrow = p.locator('svg[data-shape-endpoints]');
+  const handle = index => p.locator(`[data-arrow-end="${index}"]`);
+  const points = () => arrow.evaluate(n => n.dataset.shapeEndpoints.split(' ').map(Number).reduce((out, value, i, a) => {
+    if (!(i % 2)) {
+      const {x, y} = new DOMPoint(value, a[i+1]).matrixTransform(n.getScreenCTM());
+      out.push({x,y});
+    }
+    return out;
+  }, []));
+  const near = (a, b) => assert.ok(Math.hypot(a.x-b.x,a.y-b.y) < 2, JSON.stringify([a,b]));
+  const arm = async () => {
+    await p.locator('[data-act=add-shape]').click();
+    await p.locator('[data-shape-kind=arrow]').click();
+  };
+  try {
+    await p.setContent(shell(''));
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    await arm();
+    await p.keyboard.press('Escape');
+    const b = await p.locator('[data-artboard=p1]').boundingBox();
+    await drag(p,{x:b.x+100,y:b.y+100},{x:b.x+200,y:b.y+200});
+    assert.equal(await arrow.count(),0);
+    await arm();
+    const original = await drawArrow(p);
+    const originalPoints = await points();
+    near(originalPoints[0], original.start);
+    near(originalPoints[1], original.end);
+    assert.ok(await handle(0).isVisible() && await handle(1).isVisible());
+    assert.equal(await p.locator('.sel').isVisible(), false);
+    const originalMarkup = await arrow.evaluate(n => n.outerHTML);
+    const newTip = {x:original.start.x, y:original.end.y - 25};
+    await drag(p,originalPoints[1],newTip);
+    const next = await points();
+    near(next[0],originalPoints[0]); near(next[1],newTip);
+    const dimensions = await arrow.evaluate(n => {
+      const path = n.querySelector('[data-shape-ink]');
+      const pts = path.getAttribute('d').match(/-?[\d.]+/g).map(Number);
+      return [Number(path.getAttribute('stroke-width')),Math.hypot(pts[4]-pts[8],pts[5]-pts[9]),Math.abs((pts[4]+pts[8])/2-pts[6])+Math.abs((pts[5]+pts[9])/2-pts[7])];
+    });
+    assert.deepEqual(dimensions.map(Math.round), [4,18,16]);
+    const movedMarkup = await arrow.evaluate(n => n.outerHTML);
+    await drag(p,next[0],{x:newTip.x + 180,y:newTip.y});
+    const reversed = await points();
+    near(reversed[1],next[1]);
+    assert.ok(reversed[0].x > reversed[1].x && Math.abs(reversed[0].y-reversed[1].y) < 2);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await arrow.evaluate(n => n.outerHTML),movedMarkup);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await arrow.evaluate(n => n.outerHTML),originalMarkup);
+    await p.locator('[data-act=redo]').click();
+    assert.equal(await arrow.evaluate(n => n.outerHTML),movedMarkup);
+    const saved = await p.locator('[data-artboard=p1]').evaluate(b => ({style:b.getAttribute('style'),content:b.innerHTML}));
+    const reopened = await browser.newPage();
+    try {
+      await reopened.setContent(shell(saved.content));
+      await reopened.locator('[data-artboard=p1]').evaluate((n,style)=>n.setAttribute('style',style),saved.style);
+      const ink = reopened.locator('[data-shape-ink]');
+      assert.ok(await ink.isVisible());
+      await reopened.addScriptTag({content:editor});
+      await reopened.locator('[data-act=edit]').click();
+      await ink.dispatchEvent('pointerdown',{button:0,pointerId:1});
+      await ink.dispatchEvent('pointerup',{button:0,pointerId:1});
+      assert.ok(await reopened.locator('[data-arrow-end="1"]').isVisible());
+    } finally { await reopened.close(); }
+    assert.deepEqual(errors,[]);
+  } finally { await p.close(); }
+});
+
+test('diagonal arrow exports as a native directed PowerPoint line', async () => {
+  const html = shell('<svg data-el="native-arrow" data-shape="arrow" data-shape-endpoints="260 160 10 10" viewBox="0 0 280 180" style="display:block;width:280px;height:180px"><path data-shape-ink="" d="M260 160L10 10" stroke="#164056" fill="none" stroke-width="4"/></svg>');
+  const response = await fetch(`${origin}/__html-design/export/pptx`, {
+    method: 'POST', headers: {'Content-Type':'application/json',Origin:origin},
+    body: JSON.stringify({html,title:'Directed arrow'}),
+  });
+  assert.equal(response.status,200);
+  const zip = await JSZip.loadAsync(await response.arrayBuffer());
+  const xml = await zip.file('ppt/slides/slide1.xml').async('string');
+  assert.match(xml, /name="native-arrow"/);
+  assert.match(xml, /<a:xfrm[^>]*flipH="1"[^>]*flipV="1"/);
+  assert.match(xml, /prst="line"/);
+  assert.match(xml, /<a:tailEnd type="arrow"/);
+  assert.doesNotMatch(xml, /<p:pic>/);
 });
