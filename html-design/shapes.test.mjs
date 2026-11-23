@@ -404,3 +404,49 @@ test('diagonal arrow exports as a native directed PowerPoint line', async () => 
   assert.match(xml, /<a:tailEnd type="arrow"/);
   assert.doesNotMatch(xml, /<p:pic>/);
 });
+
+test('drawing on a static board leaves existing absolute content in place', async () => {
+  const p = await browser.newPage({viewport:{width:1440,height:900}});
+  try {
+    await p.setContent(shell('<div data-el="label" style="position:absolute;left:10px;top:10px">Stage-relative label</div>'));
+    const board = p.locator('[data-artboard=p1]');
+    // A border separates the static board's padding origin from the stage origin.
+    await board.evaluate(n => {n.style.border='32px solid #ccc';});
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    const label = p.locator('[data-el=label]');
+    const before = await label.boundingBox();
+    await p.locator('[data-act=add-shape]').click();
+    await p.locator('[data-shape-kind=arrow]').click();
+    await drawArrow(p);
+    assert.equal(await p.locator('svg[data-shape-endpoints]').count(),0);
+    assert.deepEqual(await label.boundingBox(),before);
+    assert.equal(await board.evaluate(n=>getComputedStyle(n).position),'static');
+    assert.equal(await p.locator('[data-stage]').getAttribute('data-element-seq'),null);
+  } finally { await p.close(); }
+});
+
+
+test('arrow endpoints match the mouse on a scrolled artboard', async () => {
+  const p = await browser.newPage({viewport:{width:1440,height:900}});
+  try {
+    await p.setContent(shell('<div style="height:1200px;width:1300px"></div>'));
+    const board = p.locator('[data-artboard=p1]');
+    await board.evaluate(n => Object.assign(n.style,{overflow:'auto',position:'relative'}));
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    await board.evaluate(n=>n.scrollTo(100,180));
+    await p.locator('[data-act=add-shape]').click();
+    await p.locator('[data-shape-kind=arrow]').click();
+    const {start,end} = await drawArrow(p);
+    const endpoints = await p.locator('svg[data-shape-endpoints]').evaluate(n => {
+      const [x1,y1,x2,y2] = n.dataset.shapeEndpoints.split(' ').map(Number), m = n.getScreenCTM();
+      return [[x1,y1],[x2,y2]].map(([x,y]) => {
+        const point = new DOMPoint(x,y).matrixTransform(m);
+        return {x:point.x,y:point.y};
+      });
+    });
+    for (const [index, expected] of [start,end].entries())
+      assert.ok(Math.hypot(endpoints[index].x-expected.x,endpoints[index].y-expected.y) < 2);
+  } finally { await p.close(); }
+});

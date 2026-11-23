@@ -9463,20 +9463,19 @@ property of their respective owners.
         ))
           return false;
         const els = [b, ...b.querySelectorAll("[data-flow-style]")];
-        record(
-          els,
-          () => {
-            els.forEach((el) => {
-              const v = el.dataset.flowStyle;
-              v ? el.setAttribute("style", v) : el.removeAttribute("style");
-              delete el.dataset.flowStyle;
-            });
-            if (getComputedStyle(b).position === "static" && b.querySelector(":scope > svg[data-shape-endpoints]"))
-              b.style.position = "relative";
-            b.dataset.mode = "flow";
-          },
-          b
-        );
+        const before = snap(els);
+        els.forEach((el) => {
+          const style2 = el.dataset.flowStyle;
+          style2 ? el.setAttribute("style", style2) : el.removeAttribute("style");
+          delete el.dataset.flowStyle;
+        });
+        if (b.querySelector(":scope > svg[data-shape-endpoints]") && !anchorLineArrowBoard(b)) {
+          apply(before);
+          toast("切换布局会改变此页对象的位置，已保留原样", 4500);
+          return false;
+        }
+        b.dataset.mode = "flow";
+        commit(before, b);
         return true;
       }
       function getPos(el) {
@@ -10264,13 +10263,28 @@ property of their respective owners.
         root.setAttribute("data-editor-arrow", "");
         toast("拖动绘制线箭头 · Esc 取消");
       }
+      function anchorLineArrowBoard(board) {
+        if (getComputedStyle(board).position !== "static") return true;
+        const affected = [...board.querySelectorAll("*")].filter(
+          (node) => !readLineArrow(node) && getComputedStyle(node).position === "absolute" && node.getClientRects().length
+        ).map((node) => [node, node.getBoundingClientRect()]);
+        board.style.position = "relative";
+        return getComputedStyle(board).position !== "static" && affected.every(([node, before]) => {
+          const after = node.getBoundingClientRect();
+          return ["left", "top", "width", "height"].every((key2) => Math.abs(before[key2] - after[key2]) < 0.5);
+        });
+      }
       function startLineArrow(e, board) {
         disarmLineArrow();
         if (e.button !== 0 || !board || !canMutate()) return;
         const g = elementGeometry(board);
         if (!g.supported) return toast("这个画布暂不支持绘制线箭头");
         const cs = getComputedStyle(board);
-        const origin2 = mappedDelta(g.matrix, -g.w / 2 + parseFloat(cs.borderLeftWidth), -g.h / 2 + parseFloat(cs.borderTopWidth));
+        const origin2 = mappedDelta(
+          g.matrix,
+          -g.w / 2 + parseFloat(cs.borderLeftWidth) - board.scrollLeft,
+          -g.h / 2 + parseFloat(cs.borderTopWidth) - board.scrollTop
+        );
         origin2.x += g.cx;
         origin2.y += g.cy;
         const point = (event) => inverseDelta(g.matrix, event.clientX - origin2.x, event.clientY - origin2.y);
@@ -10302,21 +10316,29 @@ property of their respective owners.
             if (!event || event.pointerId !== e.pointerId || !board.isConnected || !canMutate()) return;
             const end = point(event);
             if (!farEnough(end)) return;
+            const needsAnchor = getComputedStyle(board).position === "static";
+            const before = needsAnchor && snap([board]);
+            if (needsAnchor && !anchorLineArrowBoard(board)) {
+              apply(before);
+              return toast("绘制线箭头会改变此页对象的位置，已保留原样", 4500);
+            }
             const arrow = makeLineArrow(), corner = setLineArrow(arrow, start, end);
             arrow.dataset.el = elementId(board, "shape");
             setPos(arrow, { abs: true }, corner.x, corner.y);
-            if (getComputedStyle(board).position !== "static") insertEl(arrow, board, null);
+            if (!needsAnchor) insertEl(arrow, board, null);
             else {
-              const before = snap([board]);
-              const redo = () => {
-                board.style.position = "relative";
-                board.append(arrow);
-              };
-              redo();
-              push({ board, redo, undo() {
-                arrow.remove();
-                apply(before);
-              } });
+              board.append(arrow);
+              push({
+                board,
+                redo() {
+                  board.style.position = "relative";
+                  board.append(arrow);
+                },
+                undo() {
+                  arrow.remove();
+                  apply(before);
+                }
+              });
             }
             select(arrow);
           },
