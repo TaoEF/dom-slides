@@ -37,3 +37,5 @@
 - 2026-11-09: #37 user feedback shifts prototype validation from view switching to editable same-DOM workspace, cross-artboard movement/reuse, and unchanged original thumbnail navigation; isolated opt-in iteration, not main release.
 - 2026-11-15: #40 manual mode converts every visible editable object on the current page out of Flex/Grid while preserving DOM nesting. It freezes necessary wrapper boxes, restores authored styles on return to flow, and rejects geometry that cannot be preserved. #41 records general element clipboard support as the next independent version.
 - 2026-11-19: #57 区分页级与文档级 AI 撤回。整份撤回仅在审阅汇总中显示，须明确确认，服务端也拦截未确认的整份请求。
+- 2026-11-23: #58 保留原生 PPTX 中文章节标题的单行显示。真正多行的标题及正文保留折行能力。
+- 2026-11-23: #58 简化缩略图拖拽与键盘焦点，缩略图 Enter 复用页面事务插入空白页。

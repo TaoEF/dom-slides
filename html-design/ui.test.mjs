@@ -489,6 +489,64 @@ test("single page is centered in the available work area, footer owns navigation
   }
 });
 
+test("thumbnail keyboard focus has one frame, and Enter inserts after the focused page", async () => {
+  const p = await open(undefined, false);
+  try {
+    await p.locator(".thumb[data-page-id=p1] .thumb-main").click();
+    await p.keyboard.press("ArrowDown");
+    assert.equal(await current(p), "p2");
+    const focused = p.locator(".thumb[data-page-id=p2] .thumb-main:focus-visible");
+    await focused.waitFor();
+    const outlines = await focused.evaluate(el => [
+      getComputedStyle(el).outlineStyle,
+      getComputedStyle(el.querySelector(".frame")).outlineStyle,
+      getComputedStyle(el.querySelector(".frame")).boxShadow,
+    ]);
+    assert.deepEqual(outlines.slice(0, 2), ["none", "none"]);
+    assert.notEqual(outlines[2], "none");
+    await p.keyboard.press("Enter");
+    assert.deepEqual(await order(p), ["p1", "p2", "p4", "p3"]);
+    assert.equal(await current(p), "p4");
+    await p.locator(".thumb[data-page-id=p4] .thumb-main:focus").waitFor();
+    await p.locator(".thumb[data-page-id=p4] .thumb-more").press("Enter");
+    await p.locator("[data-menu=page]").waitFor();
+    assert.deepEqual(await order(p), ["p1", "p2", "p4", "p3"]);
+  } finally { await p.close(); }
+});
+
+test("thumbnail dragging crosses other pages without activating them and cancels without a click", async () => {
+  const p = await open(undefined, false);
+  try {
+    await p.locator(".thumb[data-page-id=p2] .thumb-main").click();
+    const frame = id => p.locator(`.thumb[data-page-id=${id}] .frame`);
+    const point = async (id, ratio) => {
+      const { x, y, width, height } = await frame(id).boundingBox();
+      return [x + width / 2, y + height * ratio];
+    };
+    const start = await point("p1", 0.5), end = await point("p3", 0.9);
+    const begin = async () => {
+      await p.mouse.move(...start);
+      await p.mouse.down();
+      await p.mouse.move(...end, { steps: 12 });
+      await p.locator(".thumb-list.reordering").waitFor();
+      assert.equal(await current(p), "p2");
+      assert.deepEqual(await order(p), ["p1", "p2", "p3"]);
+    };
+    await begin();
+    await p.keyboard.press("Escape");
+    await p.mouse.up();
+    assert.equal(await current(p), "p2");
+    assert.deepEqual(await order(p), ["p1", "p2", "p3"]);
+    await begin();
+    await p.mouse.up();
+    await p.locator(".thumb-list.reordering").waitFor({ state: "detached" });
+    assert.deepEqual(await order(p), ["p2", "p3", "p1"]);
+    assert.equal(await current(p), "p1");
+    await p.locator(".thumb[data-page-id=p3] .thumb-main").click();
+    assert.equal(await current(p), "p3");
+  } finally { await p.close(); }
+});
+
 test("page add/copy/rename/reorder/delete are undoable and IDs are never reused", async () => {
   const p = await open();
   try {

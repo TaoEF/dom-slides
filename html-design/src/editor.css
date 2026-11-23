@@ -219,6 +219,10 @@ button.primary:hover:not(:disabled) {
   outline: 0;
   cursor: pointer;
   position: relative;
+  user-select: none;
+}
+.thumb-main:focus-visible {
+  outline: none;
 }
 .frame {
   position: relative;
@@ -237,18 +241,15 @@ button.primary:hover:not(:disabled) {
   pointer-events: none;
   background: #fff;
 }
-.thumb.active .frame {
+.thumb.active .frame,
+.thumb-main:focus-visible .frame {
   box-shadow: 0 0 0 1.5px var(--selection);
 }
 .thumb.active .label {
   color: #171717;
 }
-.thumb-main:hover .frame {
+.thumb-list:not(.reordering) .thumb:not(.active) .thumb-main:not(:focus-visible):hover .frame {
   box-shadow: 0 0 0 1.5px #8a8a8a;
-}
-.thumb-main:focus-visible .frame {
-  outline: 2px solid var(--selection);
-  outline-offset: 3px;
 }
 .label {
   padding: 8px 28px 0 2px;
@@ -269,7 +270,7 @@ button.primary:hover:not(:disabled) {
   opacity: 0;
   background: #f8f8f8;
 }
-.thumb:hover .thumb-more,
+.thumb-list:not(.reordering) .thumb:hover .thumb-more,
 .thumb:focus-within .thumb-more,
 .thumb.active .thumb-more {
   opacity: 1;

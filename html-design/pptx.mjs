@@ -249,12 +249,14 @@ export function collectEditableSlide(board) {
       const textRange = document.createRange();
       textRange.selectNodeContents(el);
       const lineRects = [...textRange.getClientRects()].filter(rect => rect.width && rect.height);
-      const intrinsicOneLine = cs.display === 'inline-block' && el.childNodes.length === 1 &&
+      // Office can rewrap a single-line heading measured with browser font metrics.
+      const keepOneLine = (cs.display === 'inline-block' || el.matches('h1,h2,h3,h4,h5,h6,[role="heading"]')) &&
+        el.childNodes.length === 1 &&
         el.firstChild.nodeType === Node.TEXT_NODE && !runs.some(run => run.text.includes('\n')) &&
         lineRects.length === 1;
       if (runs.length) emit(el, {
         kind: 'text', ...box, name, runs, ...baseStyle,
-        nowrap: intrinsicOneLine,
+        nowrap: keepOneLine,
         align: ['left', 'center', 'right', 'justify'].includes(cs.textAlign) ? cs.textAlign : 'left',
         valign: textVertical(el, cs, name, textItems),
         lineHeight: (parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2) * box.scale,
