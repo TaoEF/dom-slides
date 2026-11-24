@@ -630,10 +630,39 @@ test('shaft corner changes head dimensions at a fixed tip and triangle sides str
     assert.equal(shape.width,250);
     assert.equal(shape.strokeWidth,3);
     assert.ok(shape.headLength>60 && shape.headWidth>82);
+    await dragHandle(p,'[data-h=se]',-145,-165);
+    const shaftThickness=await shaft.locator('[data-shape-ink]').evaluate(n=>{
+      const points=n.getAttribute('d').match(/-?[\d.]+/g).map(Number);
+      return points.at(-1)-points[1];
+    });
+    assert.equal(shaftThickness,35);
     const head=p.locator('[data-el=triangle]');
     await head.click();
     await dragHandle(p,'[data-h=e]',50,0);
     assert.equal(await head.getAttribute('data-shape-head-width'),'90');
     assert.ok(Number(await head.getAttribute('data-shape-head-length'))>75);
+  } finally { await p.close(); }
+});
+
+
+test('a paint-only edit preserves the centering of a legacy widened arrowhead', async () => {
+  const p=await browser.newPage({viewport:{width:1440,height:900}});
+  try {
+    const legacy=arrowMarkup({id:'legacy',kind:'triangleHead',radius:0,headLength:86,headWidth:96})
+      .replace('viewBox="0 0 86 96"','viewBox="0 0 200 96"').replace('width:86px','width:200px')
+      .replace('d="M0 0L86 48L0 96Z"','d="M57 0L143 48L57 96Z"');
+    await p.setContent(shell(legacy));
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    const shape=p.locator('[data-el=legacy]'), ink=shape.locator('[data-shape-ink]');
+    assert.match(await ink.getAttribute('d'),/^M57/);
+    await shape.click();
+    await p.locator('[data-act=shape-fill-color]').click();
+    await p.locator('[data-palette-custom]').click();
+    await p.locator('.palette-hex').fill('#326ACC');
+    await p.locator('.palette-hex-form button').click();
+    assert.equal(await ink.getAttribute('fill'),'#326ACC');
+    assert.equal(await shape.getAttribute('viewBox'),'0 0 200 96');
+    assert.equal(await ink.getAttribute('d'),'M57 0L143 48L57 96Z');
   } finally { await p.close(); }
 });

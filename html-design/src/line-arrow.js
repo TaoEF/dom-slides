@@ -202,7 +202,9 @@ function shapeBox(p, width) {
 }
 function shapeGeometry(p,w,h) {
   const pad = p.strokeWidth*p.scale/2;
-  return geometry({...p,strokeWidth:p.strokeWidth*p.scale}, {x:pad,y:h/2}, {x:w-pad,y:h/2}, false);
+  // Older head-only SVGs may have a wider authored viewport than their ink.
+  const inset = p.shaft ? 0 : (w-shapeBox(p).w)/2;
+  return geometry({...p,strokeWidth:p.strokeWidth*p.scale}, {x:inset+pad,y:h/2}, {x:w-inset-pad,y:h/2}, false);
 }
 export function arrowShapeMarkup({id,kind,...options}) {
   if (!id || !arrowShapeKinds.includes(kind)) throw new Error('arrowShapeMarkup requires an id and arrow shape kind');
@@ -215,7 +217,7 @@ export function renderArrowShape(el,w,h) {
   el.setAttribute('viewBox',view(w,h));
   el.innerHTML=shapeGeometry(p,w,h);
 }
-export function setArrowParameters(el, changes, width = parseFloat(el.style.width)) {
+export function setArrowParameters(el, changes, width) {
   const p = model(el.dataset.shape, {...readArrowParameters(el),...changes});
   setFields(el,p);
   const points = readLineArrow(el);
@@ -224,7 +226,15 @@ export function setArrowParameters(el, changes, width = parseFloat(el.style.widt
     renderLineArrow(el,points);
     return;
   }
-  const {w,h} = shapeBox(p, Number.isFinite(width) ? width : undefined);
+  const view = el.viewBox.baseVal;
+  const paintOnly = width == null && Object.keys(changes).every(
+    key => ['fill','stroke','strokeWidth','radius','shaftWidth'].includes(key));
+  if (paintOnly && view.width && view.height) {
+    renderArrowShape(el,view.width,view.height);
+    return {w:view.width,h:view.height};
+  }
+  const requestedWidth = width ?? parseFloat(el.style.width);
+  const {w,h} = shapeBox(p, Number.isFinite(requestedWidth) ? requestedWidth : undefined);
   el.style.width = `${w}px`;
   el.style.height = `${h}px`;
   renderArrowShape(el,w,h);
@@ -236,7 +246,9 @@ export function resizeArrowShape(el,w,h,initial,mode,dir,p) {
     const length = p.headLength*p.scale, height = p.headWidth*p.scale;
     const k = 1 + ((w-initial.w)*length + (h-initial.h)*height)/(length*length+height*height);
     const maxLength = (initial.w-4)/p.scale - p.strokeWidth;
-    const factor = Math.min(Math.max(4/p.headLength,4/p.headWidth,k),
+    const minHeight = p.head === 'triangle' && p.heads === 'end' && p.repeat === 1
+      ? Math.max(4, Math.min(p.shaftWidth,p.headWidth)) : 4;
+    const factor = Math.min(Math.max(4/p.headLength,minHeight/p.headWidth,k),
       maxLength/p.headLength,400/p.headLength,400/p.headWidth);
     return setArrowParameters(el,{...p,headLength:number(p.headLength*factor),headWidth:number(p.headWidth*factor)},initial.w);
   }

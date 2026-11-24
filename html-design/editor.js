@@ -510,7 +510,8 @@ property of their respective owners.
   }
   function shapeGeometry(p, w, h) {
     const pad = p.strokeWidth * p.scale / 2;
-    return geometry({ ...p, strokeWidth: p.strokeWidth * p.scale }, { x: pad, y: h / 2 }, { x: w - pad, y: h / 2 }, false);
+    const inset = p.shaft ? 0 : (w - shapeBox(p).w) / 2;
+    return geometry({ ...p, strokeWidth: p.strokeWidth * p.scale }, { x: inset + pad, y: h / 2 }, { x: w - inset - pad, y: h / 2 }, false);
   }
   function arrowShapeMarkup({ id, kind, ...options }) {
     if (!id || !arrowShapeKinds.includes(kind)) throw new Error("arrowShapeMarkup requires an id and arrow shape kind");
@@ -523,7 +524,7 @@ property of their respective owners.
     el.setAttribute("viewBox", view(w, h));
     el.innerHTML = shapeGeometry(p, w, h);
   }
-  function setArrowParameters(el, changes, width = parseFloat(el.style.width)) {
+  function setArrowParameters(el, changes, width) {
     const p = model(el.dataset.shape, { ...readArrowParameters(el), ...changes });
     setFields(el, p);
     const points = readLineArrow(el);
@@ -532,7 +533,16 @@ property of their respective owners.
       renderLineArrow(el, points);
       return;
     }
-    const { w, h } = shapeBox(p, Number.isFinite(width) ? width : void 0);
+    const view2 = el.viewBox.baseVal;
+    const paintOnly = width == null && Object.keys(changes).every(
+      (key) => ["fill", "stroke", "strokeWidth", "radius", "shaftWidth"].includes(key)
+    );
+    if (paintOnly && view2.width && view2.height) {
+      renderArrowShape(el, view2.width, view2.height);
+      return { w: view2.width, h: view2.height };
+    }
+    const requestedWidth = width ?? parseFloat(el.style.width);
+    const { w, h } = shapeBox(p, Number.isFinite(requestedWidth) ? requestedWidth : void 0);
     el.style.width = `${w}px`;
     el.style.height = `${h}px`;
     renderArrowShape(el, w, h);
@@ -544,8 +554,9 @@ property of their respective owners.
       const length = p.headLength * p.scale, height = p.headWidth * p.scale;
       const k2 = 1 + ((w - initial.w) * length + (h - initial.h) * height) / (length * length + height * height);
       const maxLength = (initial.w - 4) / p.scale - p.strokeWidth;
+      const minHeight = p.head === "triangle" && p.heads === "end" && p.repeat === 1 ? Math.max(4, Math.min(p.shaftWidth, p.headWidth)) : 4;
       const factor = Math.min(
-        Math.max(4 / p.headLength, 4 / p.headWidth, k2),
+        Math.max(4 / p.headLength, minHeight / p.headWidth, k2),
         maxLength / p.headLength,
         400 / p.headLength,
         400 / p.headWidth
