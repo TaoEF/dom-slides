@@ -6,6 +6,7 @@ import JSZip from 'jszip';
 import { browserOptions } from './export.mjs';
 import { createPreviewServer } from './server.mjs';
 import { shapeMarkup } from './src/shapes.js';
+import { arrowShapeKinds, arrowShapeMarkup, connectorKinds, connectorMarkup } from './src/line-arrow.js';
 import { collectEditableSlide } from './pptx.mjs';
 import { elementGeometry } from './src/geometry.js';
 
@@ -36,7 +37,7 @@ async function drawArrow(p, start = [.65, .7], end = [.32, .35]) {
   return {start: point(start), end: point(end)};
 }
 
-test('shape palette inserts eight persistent, individually editable elements; parameters undo and reopen', async () => {
+test('shape palette inserts its three rows as persistent, individually editable elements; parameters undo and reopen', async () => {
   const p = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const errors = [];
   p.on('pageerror', e => errors.push(e.message));
@@ -45,20 +46,20 @@ test('shape palette inserts eight persistent, individually editable elements; pa
     await p.addScriptTag({ content: editor });
     await p.locator('[data-act=edit]').click();
     assert.equal(await p.locator('[data-act=export]').evaluate(n => getComputedStyle(n).fontSize), '13px');
-    const kinds = ['rect', 'ellipse', 'triangle', 'diamond', 'star', 'line', 'arrow', 'blockArrow'];
+    const kinds = ['rect', 'ellipse', 'triangle', 'diamond', 'star', ...connectorKinds, ...arrowShapeKinds];
     for (const kind of kinds) {
       await p.locator('[data-act=add-shape]').click();
-      assert.equal(await p.locator('[data-menu=shape] button').count(), 8);
+      assert.deepEqual(await p.locator('.shape-row').evaluateAll(rows => rows.map(row => row.querySelectorAll('button').length)), [5,4,6]);
       assert.equal((await p.locator('[data-menu=shape]').innerText()).trim(), '');
       await p.locator(`[data-act=shape-insert][data-shape-kind=${kind}]`).click();
-      if (kind === 'arrow') await drawArrow(p);
+      if (connectorKinds.includes(kind)) await drawArrow(p, [.35,.75], [.64,.75]);
     }
     const shapes = p.locator('[data-artboard=p1] svg[data-shape]');
-    assert.equal(await shapes.count(), 8);
+    assert.equal(await shapes.count(), kinds.length);
     const ids = await shapes.evaluateAll(nodes => nodes.map(n => n.dataset.el));
-    assert.equal(new Set(ids).size, 8);
+    assert.equal(new Set(ids).size, kinds.length);
     const lineCoverage = await p.locator('svg[data-shape=line]').evaluate(n => {
-      const path = n.firstElementChild, b = path.getBBox(), m = path.getScreenCTM();
+      const path = n.querySelector('[data-shape-ink]'), b = path.getBBox(), m = path.getScreenCTM();
       return b.width * m.a / n.getBoundingClientRect().width;
     });
     assert.ok(lineCoverage > .85, `line spans its selection box: ${lineCoverage}`);
@@ -102,7 +103,7 @@ test('shape palette inserts eight persistent, individually editable elements; pa
     try {
       await reopened.setContent(shell(saved));
       await reopened.addScriptTag({ content: editor });
-      assert.equal(await reopened.locator('svg[data-shape]').count(), 8);
+      assert.equal(await reopened.locator('svg[data-shape]').count(), kinds.length);
       assert.equal(await reopened.locator('svg[data-shape=rect] rect').getAttribute('rx'), '32');
     } finally { await reopened.close(); }
     assert.deepEqual(errors, []);
@@ -118,9 +119,9 @@ test('every inserted shape responds to its visible controls', async () => {
     for (const kind of ['rect', 'ellipse', 'triangle', 'diamond', 'star', 'line', 'arrow', 'blockArrow']) {
       await p.locator('[data-act=add-shape]').click();
       await p.locator(`[data-shape-kind=${kind}]`).click();
-      if (kind === 'arrow') await drawArrow(p);
+      if (connectorKinds.includes(kind)) await drawArrow(p);
       const shape = p.locator(`svg[data-shape=${kind}]`);
-      const ink = shape.locator(kind === 'arrow' ? '[data-shape-ink]' : ':scope > *');
+      const ink = shape.locator(connectorKinds.includes(kind) || arrowShapeKinds.includes(kind) ? '[data-shape-ink]' : ':scope > *');
       assert.ok(await p.locator('.shape-tools').isVisible(), `${kind} controls visible`);
       if (kind !== 'line' && kind !== 'arrow') {
         const gap = await shape.evaluate(n => {
@@ -153,7 +154,7 @@ test('every inserted shape responds to its visible controls', async () => {
         assert.notEqual(await shape.innerHTML(), before, `${kind} rounded contour previews`);
         await p.locator('[data-shape-prop=radius]').dispatchEvent('change');
       }
-      if (['star', 'blockArrow'].includes(kind)) {
+      if (kind === 'star') {
         const before = await shape.innerHTML();
         await shape.dispatchEvent('contextmenu', { button: 2 });
         assert.equal(await p.locator('[data-menu=element]').isVisible(), true);
@@ -448,5 +449,96 @@ test('arrow endpoints match the mouse on a scrolled artboard', async () => {
     });
     for (const [index, expected] of [start,end].entries())
       assert.ok(Math.hypot(endpoints[index].x-expected.x,endpoints[index].y-expected.y) < 2);
+  } finally { await p.close(); }
+});
+
+
+test('parameter presets materialize rounded elbows, both ends, and repeated arrowheads offline', async () => {
+  const p = await browser.newPage();
+  try {
+    const start={x:100,y:60},end={x:300,y:180};
+    const markup = [
+      connectorMarkup({id:'elbow',kind:'arrowElbow',start,end,radius:15}),
+      connectorMarkup({id:'double',kind:'arrowDouble',start,end,strokeWidth:8}),
+      arrowShapeMarkup({id:'heads',kind:'doubleChevron',headLength:44,gap:19,radius:6}),
+    ];
+    await p.setContent(shell(markup.join('')));
+    const path = id => p.locator(`[data-el=${id}] [data-shape-ink]`);
+    assert.equal((await path('elbow').getAttribute('d')).match(/Q/g).length,2);
+    assert.equal((await path('double').getAttribute('d')).match(/M/g).length,3);
+    assert.equal(await path('double').getAttribute('stroke-width'),'8');
+    assert.equal((await path('heads').getAttribute('d')).match(/Z/g).length,2);
+    assert.equal(await p.locator('[data-el=heads]').getAttribute('data-shape-gap'),'19');
+  } finally { await p.close(); }
+});
+
+test('stretching a block arrow changes the shaft while preserving its arrowhead', async () => {
+  const p = await browser.newPage({viewport:{width:1440,height:900}});
+  try {
+    await p.setContent(shell(arrowShapeMarkup({id:'block',kind:'blockArrow',headLength:60,headWidth:86,shaftWidth:29})));
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    const shape=p.locator('[data-el=block]');
+    await shape.click();
+    const geometry = () => shape.evaluate(n => {
+      const d=n.querySelector('path').getAttribute('d').match(/-?[\d.]+/g).map(Number);
+      return {width:parseFloat(n.style.width), headLength:Math.round((d[6]-d[4])*1000)/1000, headWidth:d[9]-d[5], stroke:n.querySelector('path').getAttribute('stroke-width')};
+    });
+    const before = await geometry();
+    assert.equal(await p.locator('[data-h=s]').isVisible(),false);
+    const handle = await p.locator('[data-h=e]').boundingBox();
+    const from={x:handle.x+handle.width/2,y:handle.y+handle.height/2};
+    await drag(p,from,{x:from.x+100,y:from.y});
+    const after=await geometry();
+    assert.ok(after.width > before.width + 50);
+    assert.deepEqual({...after,width:before.width},before);
+    await p.locator('[data-act=undo]').click();
+    assert.deepEqual(await geometry(),before);
+  } finally { await p.close(); }
+});
+
+test('PPTX exports double-ended lines and rounded elbows as editable native objects', async () => {
+  const start={x:100,y:100},end={x:480,y:280};
+  const html=shell(connectorMarkup({id:'double',kind:'arrowDouble',start,end})+
+    connectorMarkup({id:'elbow',kind:'arrowElbow',start:{x:120,y:125},end})+
+    arrowShapeMarkup({id:'chevrons',kind:'doubleChevron'}));
+  const response=await fetch(`${origin}/__html-design/export/pptx`,{
+    method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:JSON.stringify({html,title:'Arrow variants'}),
+  });
+  assert.equal(response.status,200);
+  const zip=await JSZip.loadAsync(await response.arrayBuffer());
+  const xml=await zip.file('ppt/slides/slide1.xml').async('string');
+  assert.match(xml,/<a:headEnd type="arrow"/);
+  assert.match(xml,/<a:tailEnd type="arrow"/);
+  assert.equal((xml.match(/<a:custGeom>/g)||[]).length,2);
+  assert.match(xml,/<a:quadBezTo>/);
+  assert.doesNotMatch(xml,/<p:pic>/);
+});
+
+
+test('dragging an elbow endpoint recalculates its route and keeps the other endpoint anchored', async () => {
+  const p=await browser.newPage({viewport:{width:1440,height:900}});
+  try {
+    await p.setContent(shell(''));
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    await p.locator('[data-act=add-shape]').click();
+    await p.locator('[data-shape-kind=arrowElbow]').click();
+    const {start,end}=await drawArrow(p);
+    const arrow=p.locator('svg[data-shape=arrowElbow]');
+    const ink=arrow.locator('[data-shape-ink]');
+    const before=await ink.getAttribute('d');
+    assert.equal(before.match(/Q/g).length,2);
+    const to={x:end.x+45,y:end.y+80};
+    await drag(p,end,to);
+    const points=await arrow.evaluate(n=>{
+      const [x,y,u,v]=n.dataset.shapeEndpoints.split(' ').map(Number);
+      return [[x,y],[u,v]].map(([a,b]) => new DOMPoint(a,b).matrixTransform(n.getScreenCTM()).toJSON());
+    });
+    assert.ok(Math.hypot(points[0].x-start.x,points[0].y-start.y)<2);
+    assert.ok(Math.hypot(points[1].x-to.x,points[1].y-to.y)<2);
+    assert.notEqual(await ink.getAttribute('d'),before);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await ink.getAttribute('d'),before);
   } finally { await p.close(); }
 });

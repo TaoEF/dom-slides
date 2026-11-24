@@ -10,7 +10,7 @@
 - 未标记的 div 若实际绘制了背景、边框、轮廓或阴影，点击空白区域会生成唯一 `data-el` 并选中；透明或零尺寸阴影不计为绘制，内部已标记对象仍先选自身。补标记可撤销、可保存和复制；作者 CSS 可能受标记影响时检查当前页样式与几何，无法安全保持时保留原稿并提示。打开文件不会批量改写。
 - 顶部「自动排版 / 手动」只切换当前页。进入手动时，当前页每个可独立编辑的可见对象都会脱离 Flex/Grid 布局，保持切换前的位置；对象内部未单独标记的 HTML 仍按原 CSS 排版。无法稳定保持位置时会取消整次切换。切回自动排版恢复该页快照，原绝对定位 CSS 不会自动变成 Flex。
 - 文字「更多 → 文字适配」检测溢出，提供「高度随内容」与「缩小字号适配」（最小6px），均可单步撤销。
-- 顶部形状入口可插入八种基础形状。选中后圆形色样分别控制填充、描边；线宽用数字或箭头调整。矩形、三角形、菱形、星形和块箭头有独立圆角控制；星形与块箭头的其他几何调整在元素右键菜单。拉伸时线宽与圆角保持设计像素值。选择线箭头工具后，在画布上按住拖动，从箭尾画到箭头；选中后可单独拖动两端，线宽和箭头头部大小保持不变。
+- 顶部形状入口按行提供基础形状、连接线和箭头形状。选中后圆形色样分别控制填充、描边；线宽用数字或箭头调整。矩形、三角形、菱形、星形和块箭头有独立圆角控制；星形和旧版块箭头的其他几何调整在元素右键菜单。四种连接线在画布上拖动定义起点和终点，选中后可独立拖动两端。折线水平与垂直走线并支持圆角。有箭身的箭头沿长度拉伸，双折角沿长度改变间距，单个无箭身的箭头等比缩放。
 - 文字颜色、形状填充和描边共用色板：上方显示全文档正在使用的颜色，下方是推荐色阶。左上「＋」进入自定义取色，可用色相、明度区域或单行 Hex 输入；选色作用于当前文字或形状，保留撤销与保存。当前版本只处理不透明色；透明度、无填充和画板背景仍由源码设置。
 - 预览即可拖动缩略图排序、点「＋」新增，页面「⋯」可复制、重命名、删除、上下移动；缩略图有焦点时，↑/↓ 翻页，Enter 在当前页后插入空白页，Ctrl/⌘ D 就地复制，Delete 删除，Alt + ↑/↓ 移动。拖动经过其他页时只更新插入线，取消时保持原页序。选中缩略图按 Ctrl/⌘ C 复制整页，在同文档或另一标签页选中目标缩略图按 Ctrl/⌘ V，新页插入目标页后，支持撤销和重做。跨服务粘贴保留源图片引用。
 - 翠绿色辅助线提示页面/元素边缘、中心吸附，以及同一行或列中相邻对象的等距居中和间距延续；间距标签按设计像素显示整数，仅显示取整，不改实际几何或 Grid/Flex 的 gap。Alt/Option 暂停吸附，Esc 取消拖动。蓝色选框和控制点表示选择。
@@ -59,6 +59,25 @@ const svg = shapeMarkup({ id: 'p1-card-arrow', kind: 'blockArrow', width: 240, h
 ```
 
 将返回的完整 `<svg>` 放在对应画板中，并保持 `data-el` 唯一。`kind` 可取 `rect`、`ellipse`、`triangle`、`diamond`、`star`、`line`、`arrow`、`blockArrow`；`strokeWidth` 范围 0–16，`radius` 和 `adjust` 范围 0–50，`width/height` 至少 8px。修改现有形状参数时，须同时更新 SVG 子节点；只改 `data-shape-*` 不会改变离线画面。编辑器的参数工具会自动同步两者。PPTX 对非矩形圆角会给出简化提示。
+
+### AI 生成连接线与箭头
+
+新版对象由 `html-design/src/line-arrow.js` 生成，返回完整的静态 SVG：
+
+```js
+import { connectorMarkup, arrowShapeMarkup } from './html-design/src/line-arrow.js';
+
+const connector = connectorMarkup({ id: 'p1-link', kind: 'arrowElbow',
+  start: { x: 100, y: 60 }, end: { x: 440, y: 230 },
+  stroke: '#326ACC', strokeWidth: 4, headLength: 18, headWidth: 16, radius: 12 });
+
+const arrow = arrowShapeMarkup({ id: 'p1-next', kind: 'doubleChevron',
+  fill: '#326ACC', headLength: 50, headWidth: 85, shaftWidth: 20, gap: 8, radius: 5 });
+```
+
+连接线预设为 `line`、`arrow`、`arrowDouble`、`arrowElbow`。坐标是定位画板 padding box 的设计像素，画板须建立绝对定位参照。箭头形状预设为 `triangleHead`、`chevron`、`thinArrow`、`notched`、`doubleChevron`、`blockArrow`。
+
+两种入口共用 `head`（`none`、`open`、`triangle`、`notched`、`ribbon`）、`heads`（`none`、`end`、`both`）、`shaft`、`strokeWidth`、`shaftWidth`、`headLength`、`headWidth`、`radius`、`repeat`（1 或 2）、`gap`、`fill`、`stroke`。连接线还可指定 `route`（`straight` 或 `elbow`），箭头形状可指定总宽 `width`。折线半径控制路径转角，独立箭头形状半径控制轮廓拐点。参数和 SVG 子节点一起保存。
 
 ## 保存、审阅与导出
 

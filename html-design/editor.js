@@ -277,23 +277,230 @@ property of their respective owners.
   // html-design/src/line-arrow.js
   var NS = "http://www.w3.org/2000/svg";
   var number = (value) => Math.round(value * 1e3) / 1e3;
-  var param = (value, fallback, min, max) => Number.isFinite(Number(value)) ? Math.min(max, Math.max(min, Number(value))) : fallback;
+  var param = (value, fallback, min, max) => {
+    const n = value != null && Number.isFinite(Number(value)) ? Number(value) : fallback;
+    return Math.min(max, Math.max(min, n));
+  };
+  var color = (value) => /^#[0-9a-f]{6}$/i.test(value || "") ? value : "#86868b";
   var minArrowLength = 20;
+  var connectorKinds = ["line", "arrow", "arrowDouble", "arrowElbow"];
+  var arrowShapeKinds = ["triangleHead", "chevron", "thinArrow", "notched", "doubleChevron", "blockArrow"];
+  var presets = {
+    line: { label: "直线", heads: "none", head: "none" },
+    arrow: { label: "单向箭头直线" },
+    arrowDouble: { label: "双向箭头直线", heads: "both" },
+    arrowElbow: { label: "单向箭头折线", route: "elbow", radius: 12 },
+    triangleHead: { label: "实心三角箭头", head: "triangle", shaft: false, strokeWidth: 0, headLength: 86, headWidth: 96, radius: 4 },
+    chevron: { label: "圆角折角", shaft: false, strokeWidth: 14, headLength: 34, headWidth: 64, radius: 4 },
+    thinArrow: { label: "带杆线箭头", headLength: 40, headWidth: 66, strokeWidth: 8, width: 200 },
+    notched: { label: "凹尾实心箭头", head: "notched", shaft: false, strokeWidth: 0, headLength: 86, headWidth: 104, radius: 3 },
+    doubleChevron: { label: "双折角", head: "ribbon", shaft: false, strokeWidth: 0, headLength: 56, headWidth: 96, shaftWidth: 25, repeat: 2, gap: 7, radius: 5 },
+    blockArrow: { label: "块箭头", head: "triangle", headLength: 72, headWidth: 110, shaftWidth: 42, strokeWidth: 2, radius: 0, width: 220 }
+  };
+  var arrowLabel = (kind) => presets[kind]?.label;
+  var defaults = {
+    route: "straight",
+    heads: "end",
+    head: "open",
+    shaft: true,
+    strokeWidth: 4,
+    shaftWidth: 22,
+    headLength: 16,
+    headWidth: 18,
+    radius: 0,
+    repeat: 1,
+    gap: 6,
+    scale: 1
+  };
+  var fields = {
+    route: "shapeRoute",
+    heads: "shapeHeads",
+    head: "shapeHead",
+    shaft: "shapeShaft",
+    strokeWidth: "shapeWidth",
+    shaftWidth: "shapeShaftWidth",
+    headLength: "shapeHeadLength",
+    headWidth: "shapeHeadWidth",
+    radius: "shapeRadius",
+    repeat: "shapeRepeat",
+    gap: "shapeGap",
+    scale: "shapeArrowScale",
+    fill: "shapeFill",
+    stroke: "shapeStroke"
+  };
+  var valid = (v, values, fallback) => values.includes(v) ? v : fallback;
+  function model(kind, options = {}) {
+    const p = { ...defaults, ...presets[kind] };
+    return {
+      route: valid(options.route, ["straight", "elbow"], p.route),
+      heads: valid(options.heads, ["none", "end", "both"], p.heads),
+      head: valid(options.head, ["none", "open", "triangle", "notched", "ribbon"], p.head),
+      shaft: options.shaft == null ? p.shaft : options.shaft === true || options.shaft === "true",
+      strokeWidth: param(options.strokeWidth, p.strokeWidth, 0, 16),
+      shaftWidth: param(options.shaftWidth, p.shaftWidth, 1, 400),
+      headLength: param(options.headLength, p.headLength, 4, 400),
+      headWidth: param(options.headWidth, p.headWidth, 4, 400),
+      radius: param(options.radius, p.radius, 0, 50),
+      repeat: Math.round(param(options.repeat, p.repeat, 1, 2)),
+      gap: param(options.gap, p.gap, 0, 400),
+      scale: param(options.scale, p.scale, 0.01, 40),
+      fill: color(options.fill),
+      stroke: color(options.stroke)
+    };
+  }
+  var readModel = (el) => model(el.dataset.shape, Object.fromEntries(
+    Object.entries(fields).map(([key, name]) => [key, el.dataset[name]])
+  ));
+  var isArrowShape = (el) => el?.matches('svg[data-shape-arrow="1"]:not([data-shape-endpoints])');
+  var arrowHasFill = (el) => !["open", "none"].includes(readModel(el).head);
+  function arrowResizeMode(el) {
+    if (!isArrowShape(el)) return null;
+    const p = readModel(el);
+    return p.shaft || p.repeat > 1 ? "length" : "uniform";
+  }
+  var arrowScale = (el) => readModel(el).scale;
   function readLineArrow(el) {
-    if (!el?.matches('svg[data-shape="arrow"][data-shape-endpoints]')) return null;
+    if (!el?.matches("svg[data-shape-endpoints]") || !connectorKinds.includes(el.dataset.shape)) return null;
     const values = el.dataset.shapeEndpoints.trim().split(/\s+/).map(Number);
     if (values.length !== 4 || values.some((n) => !Number.isFinite(n) || Math.abs(n) > 1e6)) return null;
     const [x, y, endX, endY] = values;
     return [{ x, y }, { x: endX, y: endY }];
   }
-  function makeLineArrow() {
-    const el = document.createElementNS(NS, "svg");
-    el.dataset.shape = "arrow";
-    el.dataset.shapeStroke = "#86868b";
-    el.dataset.shapeWidth = "4";
-    el.dataset.shapeHeadLength = "16";
-    el.dataset.shapeHeadWidth = "18";
-    el.setAttribute("aria-label", "线箭头");
+  var xy = ([x, y]) => `${number(x)} ${number(y)}`;
+  var towards = (a, b, r) => {
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const t = length ? Math.min(0.5, r / length) : 0;
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  };
+  function path(points, radius = 0, closed = false) {
+    if (!radius) return `M${points.map(xy).join("L")}${closed ? "Z" : ""}`;
+    const n = points.length;
+    let d = `M${xy(closed ? towards(points[0], points[1], radius) : points[0])}`;
+    for (let i = 1; i < n + Number(closed); i++) {
+      const p = points[i % n];
+      if (!closed && i === n - 1) d += `L${xy(p)}`;
+      else d += `L${xy(towards(p, points[i - 1], radius))}Q${xy(p)} ${xy(towards(p, points[(i + 1) % n], radius))}`;
+    }
+    return d + (closed ? "Z" : "");
+  }
+  function routedPoints(start, end, route) {
+    const { x, y } = start, { x: ex, y: ey } = end;
+    const points = [[x, y]];
+    if (route === "elbow" && Math.abs(ex - x) >= 1 && Math.abs(ey - y) >= 1) {
+      if (Math.abs(ex - x) >= Math.abs(ey - y)) {
+        const mid = (x + ex) / 2;
+        points.push([mid, y], [mid, ey]);
+      } else {
+        const mid = (y + ey) / 2;
+        points.push([x, mid], [ex, mid]);
+      }
+    }
+    return [...points, [ex, ey]];
+  }
+  function headPath(type, map, half, length, thickness, radius) {
+    const points = {
+      open: [[-length, -half], [0, 0], [-length, half]],
+      triangle: [[-length, -half], [0, 0], [-length, half]],
+      notched: [[-length, -half], [0, 0], [-length, half], [-length * 0.7, 0]],
+      ribbon: [[-length, -half], [-length + thickness, -half], [0, 0], [-length + thickness, half], [-length, half], [-thickness, 0]]
+    }[type];
+    return points ? path(points.map(map), radius, type !== "open") : "";
+  }
+  function pathMarkup(d, p, filled, primary = false) {
+    if (!d) return "";
+    return `<path${primary ? ' data-shape-ink=""' : ' data-shape-head-ink=""'} d="${d}" fill="${filled ? p.fill : "none"}" stroke="${p.stroke}" stroke-width="${number(p.strokeWidth)}" stroke-linecap="${p.round || p.radius > 0 ? "round" : "butt"}" stroke-linejoin="${p.round || p.radius > 0 ? "round" : "miter"}" pointer-events="${filled ? "painted" : "stroke"}"/>`;
+  }
+  function geometry(p, start, end, connector) {
+    if (connector) p = { ...p, round: true, strokeWidth: Math.max(1, p.strokeWidth) };
+    const points = routedPoints(start, end, connector ? p.route : "straight");
+    const shaft = p.shaft ? path(points, connector ? p.radius : 0) : "";
+    const reach = p.headLength * p.scale, half = p.headWidth * p.scale / 2;
+    const filled = p.head !== "open" && p.head !== "none";
+    let heads = "";
+    if (!connector && p.shaft && p.head === "triangle" && p.heads === "end" && p.repeat === 1) {
+      const cross = Math.min(half, p.shaftWidth * p.scale / 2), base = end.x - reach, y = end.y;
+      const outline = [
+        [start.x, y - cross],
+        [base, y - cross],
+        [base, y - half],
+        [end.x, y],
+        [base, y + half],
+        [base, y + cross],
+        [start.x, y + cross]
+      ];
+      return pathMarkup(path(outline, p.radius * p.scale, true), p, true, true);
+    }
+    if (p.head !== "none" && p.heads !== "none") {
+      const ends = p.heads === "both" ? [false, true] : [true];
+      for (const last of ends) {
+        const tip = last ? points.at(-1) : points[0];
+        const prev = last ? points.at(-2) : points[1];
+        const d = Math.hypot(tip[0] - prev[0], tip[1] - prev[1]) || 1;
+        const [dx, dy] = connector ? [(tip[0] - prev[0]) / d, (tip[1] - prev[1]) / d] : [last ? 1 : -1, 0];
+        for (let i = 0; i < p.repeat; i++) {
+          const offset = i * (reach + p.gap);
+          const map = ([x, y]) => [tip[0] + (x - offset) * dx - y * dy, tip[1] + (x - offset) * dy + y * dx];
+          heads += headPath(p.head, map, half, reach, Math.min(reach * 0.48, p.shaftWidth * p.scale), connector ? 0 : p.radius * p.scale);
+        }
+      }
+    }
+    const hit = connector ? [shaft, heads].filter(Boolean).join(" ") : "";
+    const hitPath = hit ? `<path d="${hit}" fill="none" stroke="transparent" stroke-width="${Math.max(14, p.strokeWidth)}" pointer-events="stroke"/>` : "";
+    if (!filled) return hitPath + pathMarkup([shaft, heads].filter(Boolean).join(" "), p, false, true);
+    return hitPath + pathMarkup(shaft, p, false, true) + pathMarkup(heads, p, true, !shaft);
+  }
+  var datasetAttrs = (p) => Object.entries(fields).map(([key, name]) => `data-${name.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())}="${p[key]}"`).join(" ");
+  var attr = (value) => String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  var view = (w, h) => `0 0 ${w} ${h}`;
+  var startView = (kind, id, p, w, h) => `<svg data-el="${attr(id)}" data-shape="${kind}" data-shape-arrow="1" aria-label="${arrowLabel(kind)}" ${datasetAttrs(p)} viewBox="${view(w, h)}" preserveAspectRatio="none"`;
+  function sizing(p) {
+    return {
+      head: p.headLength * p.scale,
+      pad: p.strokeWidth * p.scale / 2,
+      natural: p.headLength * p.scale * p.repeat + p.gap * (p.repeat - 1) + p.strokeWidth * p.scale
+    };
+  }
+  function shapeGeometry(p, w, h) {
+    const { head, pad, natural } = sizing(p);
+    const gap = !p.shaft && p.repeat === 2 ? Math.max(0, w - 2 * head - 2 * pad) : p.gap;
+    const y = h / 2, to = !p.shaft && p.repeat === 1 ? (w + natural) / 2 - pad : w - pad;
+    return geometry({ ...p, gap, strokeWidth: p.strokeWidth * p.scale }, { x: pad, y }, { x: to, y }, false);
+  }
+  function arrowShapeMarkup({ id, kind, ...options }) {
+    if (!id || !arrowShapeKinds.includes(kind)) throw new Error("arrowShapeMarkup requires an id and arrow shape kind");
+    const p = model(kind, options), { natural } = sizing(p);
+    const w = param(options.width, presets[kind].width ?? natural, natural, 5e3);
+    const h = p.headWidth * p.scale + p.strokeWidth * p.scale;
+    return `${startView(kind, id, p, w, h)} style="width:${w}px;height:${h}px;display:block;overflow:visible">${shapeGeometry(p, w, h)}</svg>`;
+  }
+  function renderArrowShape(el, w, h) {
+    el.setAttribute("viewBox", view(w, h));
+    el.innerHTML = shapeGeometry(readModel(el), w, h);
+  }
+  function resizeArrowShape(el, w, h, initial, mode, scale) {
+    if (mode === "length") return { w: Math.max(sizing(readModel(el)).natural, w), h: initial.h };
+    const k = Math.max(0.1, w === initial.w ? h / initial.h : w / initial.w, 8 / initial.w, 8 / initial.h);
+    el.dataset.shapeArrowScale = String(k * scale);
+    return { w: initial.w * k, h: initial.h * k };
+  }
+  function connectorBox(start, end) {
+    const pad = 12;
+    const x = Math.min(start.x, end.x) - pad, y = Math.min(start.y, end.y) - pad;
+    return {
+      x,
+      y,
+      w: number(Math.abs(start.x - end.x) + 2 * pad),
+      h: number(Math.abs(start.y - end.y) + 2 * pad),
+      local: [{ x: number(start.x - x), y: number(start.y - y) }, { x: number(end.x - x), y: number(end.y - y) }]
+    };
+  }
+  var vector = (points) => points.map(({ x, y }) => `${x} ${y}`).join(" ");
+  function makeLineArrow(kind = "arrow") {
+    const el = document.createElementNS(NS, "svg"), p = model(kind);
+    el.dataset.shape = kind;
+    el.dataset.shapeArrow = "1";
+    for (const [key, name] of Object.entries(fields)) el.dataset[name] = String(p[key]);
+    el.setAttribute("aria-label", arrowLabel(kind));
     el.setAttribute("preserveAspectRatio", "none");
     Object.assign(el.style, {
       position: "absolute",
@@ -306,29 +513,16 @@ property of their respective owners.
     return el;
   }
   function setLineArrow(el, start, end) {
-    const pad = 12;
-    const x = Math.min(start.x, end.x) - pad, y = Math.min(start.y, end.y) - pad;
-    const w = number(Math.abs(start.x - end.x) + pad * 2);
-    const h = number(Math.abs(start.y - end.y) + pad * 2);
-    el.setAttribute("viewBox", `0 0 ${w} ${h}`);
+    const { x, y, w, h, local } = connectorBox(start, end);
+    el.setAttribute("viewBox", view(w, h));
     el.style.width = `${w}px`;
     el.style.height = `${h}px`;
-    el.dataset.shapeEndpoints = [start.x - x, start.y - y, end.x - x, end.y - y].map(number).join(" ");
-    renderLineArrow(el, readLineArrow(el));
+    el.dataset.shapeEndpoints = vector(local);
+    renderLineArrow(el, local);
     return { x, y };
   }
   function renderLineArrow(el, [start, end]) {
-    const length = Math.hypot(end.x - start.x, end.y - start.y) || 1;
-    const dx = (end.x - start.x) / length, dy = (end.y - start.y) / length;
-    const headLength = param(el.dataset.shapeHeadLength, 16, 2, 100);
-    const halfHead = param(el.dataset.shapeHeadWidth, 18, 2, 100) / 2;
-    const width = param(el.dataset.shapeWidth, 4, 1, 16);
-    const color2 = /^#[0-9a-f]{6}$/i.test(el.dataset.shapeStroke) ? el.dataset.shapeStroke : "#86868b";
-    const base = { x: end.x - dx * headLength, y: end.y - dy * headLength };
-    const p = (x, y) => `${number(x)} ${number(y)}`;
-    const shaft = `M${p(start.x, start.y)}L${p(end.x, end.y)}`;
-    const head = `M${p(base.x - dy * halfHead, base.y + dx * halfHead)}L${p(end.x, end.y)}L${p(base.x + dy * halfHead, base.y - dx * halfHead)}`;
-    el.innerHTML = `<path d="${shaft}" fill="none" stroke="transparent" stroke-width="${Math.max(14, width)}" pointer-events="stroke"/><path data-shape-ink="" d="${shaft} ${head}" fill="none" stroke="${color2}" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round" pointer-events="stroke"/>`;
+    el.innerHTML = geometry(readModel(el), start, end, true);
   }
 
   // html-design/src/geometry.js
@@ -626,16 +820,16 @@ property of their respective owners.
       }
     const ordered = [...ids].sort((a, b) => b[0].length - a[0].length);
     for (const node of all) {
-      for (const attr of [...node.attributes]) {
-        if (["id", "src", "srcset"].includes(attr.name)) continue;
-        let value = attr.value;
-        if (["for", "headers", "aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "aria-flowto", "aria-activedescendant", "aria-details", "aria-errormessage"].includes(attr.name))
+      for (const attr2 of [...node.attributes]) {
+        if (["id", "src", "srcset"].includes(attr2.name)) continue;
+        let value = attr2.value;
+        if (["for", "headers", "aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "aria-flowto", "aria-activedescendant", "aria-details", "aria-errormessage"].includes(attr2.name))
           value = value.split(/\s+/).map((id) => ids.get(id) || id).join(" ");
         for (const [before, after] of ordered) {
           value = value.replaceAll(`url(#${before})`, `url(#${after})`).replaceAll(`url("#${before}")`, `url("#${after}")`).replaceAll(`url('#${before}')`, `url('#${after}')`);
           if (value === `#${before}`) value = `#${after}`;
         }
-        if (value !== attr.value) node.setAttribute(attr.name, value);
+        if (value !== attr2.value) node.setAttribute(attr2.name, value);
       }
       if (node.matches("style")) {
         let css = node.textContent;
@@ -741,15 +935,15 @@ property of their respective owners.
               throw new Error("含生成内容的对象暂不支持跨画布复用");
           const target = pairs.get(node), cs = getComputedStyle(node);
           if (node.hasAttribute("srcset")) throw new Error("含 srcset 的对象暂不支持跨页复制");
-          for (const attr of ["src", "href", "poster", "xlink:href"]) {
-            const value = node.getAttribute(attr);
+          for (const attr2 of ["src", "href", "poster", "xlink:href"]) {
+            const value = node.getAttribute(attr2);
             if (!value || value.startsWith("#")) continue;
             const url = new URL(value, node.baseURI);
             if (url.protocol === "blob:" || url.protocol === "javascript:")
               throw new Error("这种资源暂不支持跨页复制");
-            if (attr === "xlink:href" && node.hasAttributeNS("http://www.w3.org/1999/xlink", "href"))
-              target.setAttributeNS("http://www.w3.org/1999/xlink", attr, url.href);
-            else target.setAttribute(attr, url.href);
+            if (attr2 === "xlink:href" && node.hasAttributeNS("http://www.w3.org/1999/xlink", "href"))
+              target.setAttributeNS("http://www.w3.org/1999/xlink", attr2, url.href);
+            else target.setAttribute(attr2, url.href);
           }
           target.removeAttribute("contenteditable");
           target.removeAttribute("data-bbox");
@@ -1139,7 +1333,7 @@ property of their respective owners.
         count += nodes.length;
         if (count > 500 || object.frames.length !== nodes.length || nodes.some((node) => {
           if (node.matches("script,style,link,iframe,object,embed,video,canvas,form")) return true;
-          return [...node.attributes].some((attr) => /^on/i.test(attr.name) || attr.name === "srcdoc" || /^(href|src|poster)$/i.test(attr.name) && /^\s*javascript:/i.test(attr.value));
+          return [...node.attributes].some((attr2) => /^on/i.test(attr2.name) || attr2.name === "srcdoc" || /^(href|src|poster)$/i.test(attr2.name) && /^\s*javascript:/i.test(attr2.value));
         })) throw new Error("剪贴板对象含不支持的内容");
         const frames = object.frames.map((frame) => {
           if (!frame || !["cx", "cy", "w", "h"].every((key) => Number.isFinite(frame[key]) && Math.abs(frame[key]) < 1e7))
@@ -1316,11 +1510,11 @@ property of their respective owners.
   }
 
   // html-design/src/crop-geometry.js
-  function cropGeometry(frame, geometry2) {
+  function cropGeometry(frame, geometry3) {
     const img = frame?.querySelector(":scope > img[data-crop-image]");
     const fail = (reason) => ({ supported: false, reason });
     if (!frame?.matches('[data-crop-frame="1"]') || !img) return fail("invalid crop structure");
-    const cs = getComputedStyle(frame), s = getComputedStyle(img), g = geometry2(frame), inner = geometry2(img);
+    const cs = getComputedStyle(frame), s = getComputedStyle(img), g = geometry3(frame), inner = geometry3(img);
     if (cs.filter !== "none" || cs.clipPath !== "none" || cs.maskImage !== "none") return fail("unsupported frame clip or effect");
     if (!g.supported || !inner.supported) return fail("unsupported crop transform");
     if (!["clip", "hidden"].includes(cs.overflowX) || !["clip", "hidden"].includes(cs.overflowY)) return fail("crop frame does not clip");
@@ -1435,8 +1629,8 @@ property of their respective owners.
       img.style.setProperty("--crop-x", "50%");
       img.style.setProperty("--crop-y", "50%");
       const after = peers.map((n) => n === img ? frame.getBoundingClientRect() : n.getBoundingClientRect());
-      const valid = after.every((r, i) => ["x", "y", "width", "height"].every((k) => Math.abs(r[k] - boxes2[i][k]) < 0.6)) && cropGeometry(frame, elementGeometry).supported;
-      if (!valid) {
+      const valid2 = after.every((r, i) => ["x", "y", "width", "height"].every((k) => Math.abs(r[k] - boxes2[i][k]) < 0.6)) && cropGeometry(frame, elementGeometry).supported;
+      if (!valid2) {
         frame.before(img);
         frame.remove();
         restoreAttrs(img, before);
@@ -1598,10 +1792,10 @@ property of their respective owners.
     $(".crop-zoom-value").addEventListener("change", (e) => zoom(e.target.value));
     function cleanClone(doc) {
       if (!session) return;
-      const n = target(), path = [];
-      for (let p = n; p !== document.documentElement; p = p.parentNode) path.unshift([...p.parentNode.childNodes].indexOf(p));
+      const n = target(), path2 = [];
+      for (let p = n; p !== document.documentElement; p = p.parentNode) path2.unshift([...p.parentNode.childNodes].indexOf(p));
       let dest = doc;
-      for (const i of path) dest = dest.childNodes[i];
+      for (const i of path2) dest = dest.childNodes[i];
       const img = session.img.cloneNode(false);
       restoreAttrs(img, session.entry.ia);
       if (session.entry.frame) {
@@ -1684,7 +1878,7 @@ property of their respective owners.
   }
 
   // html-design/src/editor.css
-  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n  user-select: none;\n}\n.thumb-main:focus-visible {\n  outline: none;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame,\n.thumb-main:focus-visible .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-list:not(.reordering) .thumb:not(.active) .thumb-main:not(:focus-visible):hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb-list:not(.reordering) .thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch, .tbar .color-control .shape-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.text-tools .number-stepper { width: 64px; }\n.text-tools .number-stepper input { width: 47px; font-size: 14px; }\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; padding:0; }\n.color-control:hover { background:var(--hover); }\n.color-control .color-swatch, .color-control .shape-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap:0; width:36px; }\n.add-text .icon:first-child { width:17px; height:17px; }\n.add-text .icon:last-child { width:10px; height:10px; }\n.text-style-palette { width:245px; }\n.text-style-palette button { display:flex; justify-content:flex-start; width:100%; height:44px; gap:8px; padding:0 9px; text-align:left; }\n.text-style-palette .style-preview { flex:none; display:block; width:46px; overflow:hidden; text-align:center; line-height:1; }\n.text-style-palette .style-description { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }\n.add-shape { gap: 0; width: 36px; }\n.add-shape .icon:first-child { width: 17px; height: 17px; }\n.add-shape .icon:last-child { width: 10px; height: 10px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="s"]):not([data-h="se"]) { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.color-palette { width:306px; max-width:calc(100vw - 20px); padding:14px; color:#292929; }\n.color-palette .palette-heading { font-size:13px; color:#686868; margin-bottom:10px; }\n.palette-current, .palette-recommended { display:grid; grid-template-columns:repeat(9, 1fr); gap:5px; }\n.color-palette .palette-swatch { display:block; width:100%; height:28px; min-width:0; padding:0; border:1px solid #00000014; border-radius:6px; }\n.color-palette .palette-swatch:hover { outline:2px solid #777; outline-offset:1px; }\n.color-palette .palette-swatch[aria-pressed="true"] { outline:2px solid #666; outline-offset:1px; }\n.color-palette .palette-add { display:flex; align-items:center; justify-content:center; background:#fff; color:#4c4c4c; }\n.color-palette .palette-add .icon { width:18px; height:18px; }\n.palette-divider { height:1px; margin:14px 0; background:#ececec; }\n.palette-recommended { row-gap:5px; }\n.palette-custom-heading { display:flex; align-items:center; gap:5px; margin-bottom:13px; font-size:13px; }\n.color-palette .palette-back { width:27px; height:27px; padding:5px; justify-content:center; }\n.palette-sv { position:relative; height:148px; border-radius:7px; background:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent),var(--palette-hue,#f00); cursor:crosshair; touch-action:none; }\n.palette-cursor { position:absolute; left:100%; top:0; width:13px; height:13px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0008; transform:translate(-50%,-50%); pointer-events:none; }\n.palette-hue { display:block; width:100%; height:16px; margin:15px 0; appearance:none; border-radius:9px; background:linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); }\n.palette-hue::-webkit-slider-thumb { appearance:none; width:16px; height:16px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0006; background:#fff; cursor:pointer; }\n.palette-hex-form { display:flex; align-items:center; gap:7px; }\n.palette-hex-form label { color:#666; }\n.palette-hex-form input { flex:1; min-width:0; height:31px; padding:0 8px; border:1px solid #ddd; border-radius:5px; font:inherit; color:#292929; }\n.color-palette .palette-hex-form button { width:auto; height:31px; padding:0 12px; background:#242424; color:#fff; justify-content:center; }\n.palette-hex-error { margin:7px 0 0; color:#b32727; font-size:11px; }\n.shape-palette { display: grid; grid-template-columns: repeat(4, 42px); gap: 4px; min-width: 0; padding: 8px; }\n.shape-palette[hidden] { display: none; }\n.shape-palette button { width: 42px; height: 42px; padding: 9px; justify-content: center; }\n.shape-palette svg { width: 24px; height: 24px; }\n.shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }\n.shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }\n.shape-stroke-color .shape-swatch { background: transparent; border: 3px solid currentColor; }\n.shape-width-control { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }\n.number-stepper { display: inline-flex; align-items: center; height: 29px; width: 52px; border-radius: 5px; background: #383838; }\n.number-stepper input { width: 35px; min-width: 0; height: 27px; border: 0; padding: 0 2px; outline: 0; background: transparent; color: #fff; text-align: center; appearance: textfield; font-variant-numeric: tabular-nums; }\n.number-stepper input::-webkit-inner-spin-button { appearance: none; }\n.number-steps { display: flex; flex-direction: column; width: 15px; height: 27px; }\n.number-steps button { width: 15px; min-width: 15px; height: 13px; min-height: 13px; padding: 0; border-radius: 2px; color: #c9c9cc; }\n.number-steps button .icon { width: 10px; height: 10px; }\n.shape-radius input, .shape-adjust input { width: 82px; accent-color: #c9c9cc; }\n.shape-more-section[hidden] { display: none; }\n.shape-more-section .shape-adjust { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; font-size: 12px; }\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n    gap: 2px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .tools { gap: 0; }\n  .head .layout-toggle { margin-inline: 0; }\n  .head .layout-toggle button { padding-inline: 3px; font-size: 10px; }\n  .head .tools > [data-act="add-text"],\n  .head .tools > [data-act="add-image"],\n  .head .tools > [data-act="add-shape"] { width: 27px; min-width: 27px; padding: 0; }\n  .head .add-shape .icon:last-child { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n\n.page-size-dialog{position:fixed;inset:0;z-index:2147483647;background:#0005;display:grid;place-items:center;padding:16px;color:#202020;font:13px/1.5 system-ui,sans-serif}\n.size-box{width:min(360px,100%);box-sizing:border-box;background:#fff;border-radius:12px;padding:22px}\n.size-heading,.size-fields,.size-actions{display:flex;align-items:center;gap:12px}.size-heading h2{font-size:17px;margin:0;flex:1}.size-close{padding:0;width:28px}.size-page{color:#646464;margin:4px 0 20px}.size-box label{display:block;flex:1;min-width:0}.size-box select,.size-box input{box-sizing:border-box;width:100%;margin:6px 0 16px;padding:9px 10px;background:#f2f2f2;border:0;border-radius:6px;color:#202020;font:inherit}.size-fields label{position:relative}.size-fields input{padding-right:30px}.size-fields span{position:absolute;right:10px;top:35px;color:#646464}.size-note{font-size:12px;color:#646464;margin:0 0 20px}.size-error{font-size:12px;color:#b42318}.size-actions{justify-content:flex-end}.size-actions button{padding-inline:14px}.size-box :focus-visible{outline:2px solid #258bff;outline-offset:2px}\n.workspace-switch{flex-shrink:0;margin-inline:auto;background:#e8e8e8}.workspace-switch button{font-size:12px;padding:4px 9px;min-width:0}.workspace-switch [aria-pressed=true]{background:#fff;color:#202020}.workspace-label{position:fixed;height:24px;min-height:24px;justify-content:flex-start;padding:0;background:transparent;font-size:11px;color:#646464;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:auto}.workspace-label:hover{background:transparent;color:#202020}.workspace-ghost{position:fixed;inset:0;pointer-events:none;z-index:2147483641}.workspace-ghost *{pointer-events:none!important}.workspace-labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}\n@media(max-width:760px){:host([data-workspace-enabled]) .page-title{display:none}:host([data-workspace-enabled]) .footer{gap:2px}:host([data-workspace-enabled]) .workspace-switch button{padding-inline:6px;font-size:11px}}\n\n.arrow-end {\n  position: fixed;\n  z-index: 2147483645;\n  width: 11px;\n  height: 11px;\n  border: 1px solid var(--selection);\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 1px #ffffff80;\n  transform: translate(-50%, -50%);\n  cursor: crosshair;\n  pointer-events: auto;\n}\n.arrow-preview, .arrow-preview * {\n  pointer-events: none !important;\n}\n.arrow-preview {\n  z-index: 2147483643;\n}\n';
+  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n  user-select: none;\n}\n.thumb-main:focus-visible {\n  outline: none;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame,\n.thumb-main:focus-visible .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-list:not(.reordering) .thumb:not(.active) .thumb-main:not(:focus-visible):hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb-list:not(.reordering) .thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch, .tbar .color-control .shape-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.text-tools .number-stepper { width: 64px; }\n.text-tools .number-stepper input { width: 47px; font-size: 14px; }\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; padding:0; }\n.color-control:hover { background:var(--hover); }\n.color-control .color-swatch, .color-control .shape-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap:0; width:36px; }\n.add-text .icon:first-child { width:17px; height:17px; }\n.add-text .icon:last-child { width:10px; height:10px; }\n.text-style-palette { width:245px; }\n.text-style-palette button { display:flex; justify-content:flex-start; width:100%; height:44px; gap:8px; padding:0 9px; text-align:left; }\n.text-style-palette .style-preview { flex:none; display:block; width:46px; overflow:hidden; text-align:center; line-height:1; }\n.text-style-palette .style-description { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }\n.add-shape { gap: 0; width: 36px; }\n.add-shape .icon:first-child { width: 17px; height: 17px; }\n.add-shape .icon:last-child { width: 10px; height: 10px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="s"]):not([data-h="se"]) { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.color-palette { width:306px; max-width:calc(100vw - 20px); padding:14px; color:#292929; }\n.color-palette .palette-heading { font-size:13px; color:#686868; margin-bottom:10px; }\n.palette-current, .palette-recommended { display:grid; grid-template-columns:repeat(9, 1fr); gap:5px; }\n.color-palette .palette-swatch { display:block; width:100%; height:28px; min-width:0; padding:0; border:1px solid #00000014; border-radius:6px; }\n.color-palette .palette-swatch:hover { outline:2px solid #777; outline-offset:1px; }\n.color-palette .palette-swatch[aria-pressed="true"] { outline:2px solid #666; outline-offset:1px; }\n.color-palette .palette-add { display:flex; align-items:center; justify-content:center; background:#fff; color:#4c4c4c; }\n.color-palette .palette-add .icon { width:18px; height:18px; }\n.palette-divider { height:1px; margin:14px 0; background:#ececec; }\n.palette-recommended { row-gap:5px; }\n.palette-custom-heading { display:flex; align-items:center; gap:5px; margin-bottom:13px; font-size:13px; }\n.color-palette .palette-back { width:27px; height:27px; padding:5px; justify-content:center; }\n.palette-sv { position:relative; height:148px; border-radius:7px; background:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent),var(--palette-hue,#f00); cursor:crosshair; touch-action:none; }\n.palette-cursor { position:absolute; left:100%; top:0; width:13px; height:13px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0008; transform:translate(-50%,-50%); pointer-events:none; }\n.palette-hue { display:block; width:100%; height:16px; margin:15px 0; appearance:none; border-radius:9px; background:linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); }\n.palette-hue::-webkit-slider-thumb { appearance:none; width:16px; height:16px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0006; background:#fff; cursor:pointer; }\n.palette-hex-form { display:flex; align-items:center; gap:7px; }\n.palette-hex-form label { color:#666; }\n.palette-hex-form input { flex:1; min-width:0; height:31px; padding:0 8px; border:1px solid #ddd; border-radius:5px; font:inherit; color:#292929; }\n.color-palette .palette-hex-form button { width:auto; height:31px; padding:0 12px; background:#242424; color:#fff; justify-content:center; }\n.palette-hex-error { margin:7px 0 0; color:#b32727; font-size:11px; }\n.shape-palette { display: grid; gap: 5px; min-width: 0; padding: 8px; }\n.shape-row { display: flex; gap: 3px; }\n.shape-row + .shape-row { border-top: 1px solid #ececec; padding-top: 5px; }\n.sel.arrow-length i:not([data-h="e"]):not([data-h="w"]) { display: none; }\n.shape-palette[hidden] { display: none; }\n.shape-palette button { width: clamp(32px, 8vw, 39px); height: 38px; padding: 7px; justify-content: center; }\n.shape-palette svg { width: 24px; height: 24px; }\n.shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }\n.shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }\n.shape-stroke-color .shape-swatch { background: transparent; border: 3px solid currentColor; }\n.shape-width-control { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }\n.number-stepper { display: inline-flex; align-items: center; height: 29px; width: 52px; border-radius: 5px; background: #383838; }\n.number-stepper input { width: 35px; min-width: 0; height: 27px; border: 0; padding: 0 2px; outline: 0; background: transparent; color: #fff; text-align: center; appearance: textfield; font-variant-numeric: tabular-nums; }\n.number-stepper input::-webkit-inner-spin-button { appearance: none; }\n.number-steps { display: flex; flex-direction: column; width: 15px; height: 27px; }\n.number-steps button { width: 15px; min-width: 15px; height: 13px; min-height: 13px; padding: 0; border-radius: 2px; color: #c9c9cc; }\n.number-steps button .icon { width: 10px; height: 10px; }\n.shape-radius input, .shape-adjust input { width: 82px; accent-color: #c9c9cc; }\n.shape-more-section[hidden] { display: none; }\n.shape-more-section .shape-adjust { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; font-size: 12px; }\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n    gap: 2px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .tools { gap: 0; }\n  .head .layout-toggle { margin-inline: 0; }\n  .head .layout-toggle button { padding-inline: 3px; font-size: 10px; }\n  .head .tools > [data-act="add-text"],\n  .head .tools > [data-act="add-image"],\n  .head .tools > [data-act="add-shape"] { width: 27px; min-width: 27px; padding: 0; }\n  .head .add-shape .icon:last-child { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n\n.page-size-dialog{position:fixed;inset:0;z-index:2147483647;background:#0005;display:grid;place-items:center;padding:16px;color:#202020;font:13px/1.5 system-ui,sans-serif}\n.size-box{width:min(360px,100%);box-sizing:border-box;background:#fff;border-radius:12px;padding:22px}\n.size-heading,.size-fields,.size-actions{display:flex;align-items:center;gap:12px}.size-heading h2{font-size:17px;margin:0;flex:1}.size-close{padding:0;width:28px}.size-page{color:#646464;margin:4px 0 20px}.size-box label{display:block;flex:1;min-width:0}.size-box select,.size-box input{box-sizing:border-box;width:100%;margin:6px 0 16px;padding:9px 10px;background:#f2f2f2;border:0;border-radius:6px;color:#202020;font:inherit}.size-fields label{position:relative}.size-fields input{padding-right:30px}.size-fields span{position:absolute;right:10px;top:35px;color:#646464}.size-note{font-size:12px;color:#646464;margin:0 0 20px}.size-error{font-size:12px;color:#b42318}.size-actions{justify-content:flex-end}.size-actions button{padding-inline:14px}.size-box :focus-visible{outline:2px solid #258bff;outline-offset:2px}\n.workspace-switch{flex-shrink:0;margin-inline:auto;background:#e8e8e8}.workspace-switch button{font-size:12px;padding:4px 9px;min-width:0}.workspace-switch [aria-pressed=true]{background:#fff;color:#202020}.workspace-label{position:fixed;height:24px;min-height:24px;justify-content:flex-start;padding:0;background:transparent;font-size:11px;color:#646464;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:auto}.workspace-label:hover{background:transparent;color:#202020}.workspace-ghost{position:fixed;inset:0;pointer-events:none;z-index:2147483641}.workspace-ghost *{pointer-events:none!important}.workspace-labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}\n@media(max-width:760px){:host([data-workspace-enabled]) .page-title{display:none}:host([data-workspace-enabled]) .footer{gap:2px}:host([data-workspace-enabled]) .workspace-switch button{padding-inline:6px;font-size:11px}}\n\n.arrow-end {\n  position: fixed;\n  z-index: 2147483645;\n  width: 11px;\n  height: 11px;\n  border: 1px solid var(--selection);\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 1px #ffffff80;\n  transform: translate(-50%, -50%);\n  cursor: crosshair;\n  pointer-events: auto;\n}\n.arrow-preview, .arrow-preview * {\n  pointer-events: none !important;\n}\n.arrow-preview {\n  z-index: 2147483643;\n}\n';
 
   // node_modules/lucide/dist/esm/icons/arrow-down.mjs
   var ArrowDown = [
@@ -2159,12 +2353,12 @@ property of their respective owners.
     doc.head.append(style2);
     return "<!DOCTYPE html>\n" + doc.documentElement.outerHTML;
   }
-  function createReview({ ui, persistence, navigate, view, restoreTarget, toast }) {
+  function createReview({ ui, persistence, navigate, view: view2, restoreTarget, toast }) {
     const bar = ui.querySelector(".review-actions"), summary = ui.querySelector(".review-summary"), trigger = summary.querySelector(".review-trigger"), panel = summary.querySelector(".review-panel"), list = summary.querySelector(".review-list");
     const projection = ui.querySelector(".review-before"), hint = ui.querySelector(".review-hint");
     let state = { review: { items: [], generation: 0 }, revision: "" }, drawn = "", busy = false, active = null, epoch = 0, frame, loaded = null, lastView = "", expanded = false, raf;
     const cache = /* @__PURE__ */ new Map();
-    const pageId = () => view().board?.dataset.artboard || "";
+    const pageId = () => view2().board?.dataset.artboard || "";
     const cacheKey = (id) => `${state.revision}:${state.review.generation}:${state.review.scope}:${id}`;
     const enabled = () => state.canReview && !busy && !state.review.conflict;
     function endBefore() {
@@ -2251,7 +2445,7 @@ property of their respective owners.
       if (!raf && (state.review.items.length || state.review.conflict)) raf = requestAnimationFrame(tick);
     }
     function position() {
-      const v = view(), id = v.board?.dataset.artboard || "", review = state.review;
+      const v = view2(), id = v.board?.dataset.artboard || "", review = state.review;
       const item = review.scope === "pages" ? review.items.find((i) => i.id === id && i.kind !== "deleted") : null;
       const scene = `${id}:${v.playing}:${innerWidth}:${innerHeight}:${v.layoutWidth}:${v.layoutHeight}`;
       if (scene !== lastView) {
@@ -2314,7 +2508,7 @@ property of their respective owners.
     }
     async function startBefore(b) {
       const item = state.review.items.find((i) => i.id === b.dataset.reviewId);
-      if (!item || item.kind === "added" || busy || state.reviewing || state.review.conflict || view().playing) {
+      if (!item || item.kind === "added" || busy || state.reviewing || state.review.conflict || view2().playing) {
         endBefore();
         return;
       }
@@ -2340,7 +2534,7 @@ property of their respective owners.
           hint.textContent = "新增页面没有修改前版本";
           return;
         }
-        const v = view(), width = v.layoutWidth || 1280;
+        const v = view2(), width = v.layoutWidth || 1280;
         frame = document.createElement("iframe");
         const ownFrame = frame;
         frame.title = "AI 修改前，只读预览";
@@ -2427,7 +2621,7 @@ property of their respective owners.
         toast("连接或交接暂不可用，请稍后再试");
         return;
       }
-      const item = state.review.items.find((i) => i.id === id), initialPage = pageId(), initialEpoch = view().intentEpoch;
+      const item = state.review.items.find((i) => i.id === id), initialPage = pageId(), initialEpoch = view2().intentEpoch;
       if (command !== "accept-all" && !item) return;
       const expectedGeneration = state.review.generation;
       const confirmDocumentUndo = command === "undo" && state.review.scope === "document";
@@ -2439,7 +2633,7 @@ property of their respective owners.
       try {
         await persistence().reviewAction(command === "accept-all" ? "accept" : command, command === "accept-all" ? "all" : id, expectedGeneration, {
           confirmDocumentUndo,
-          stillCurrent: () => initialEpoch === view().intentEpoch && initialPage === pageId() && !view().playing
+          stillCurrent: () => initialEpoch === view2().intentEpoch && initialPage === pageId() && !view2().playing
         });
       } catch (error) {
         toast(error.message, 6e3);
@@ -2475,12 +2669,21 @@ property of their respective owners.
     star: '<path d="m12 2 2.9 6.6 7.1.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7L2 9.3l7.1-.7Z"/>',
     line: '<path d="M2 12h20" fill="none"/>',
     arrow: '<path d="M2 12h20m-7-7 7 7-7 7" fill="none"/>',
-    blockArrow: '<path d="M2 8h12V3l8 9-8 9v-5H2Z"/>'
+    arrowDouble: '<path d="M2 12h20M8 6l-6 6 6 6m8-12 6 6-6 6"/>',
+    arrowElbow: '<path d="M2 18h6a3 3 0 0 0 3-3V9a3 3 0 0 1 3-3h8m-5-5 5 5-5 5"/>',
+    triangleHead: '<path d="M6 4l14 8-14 8Z" fill="currentColor" stroke="none"/>',
+    chevron: '<path d="m8 5 7 7-7 7" stroke-width="3.2"/>',
+    thinArrow: '<path d="M3 12h17m-7-7 7 7-7 7" stroke-linecap="square"/>',
+    notched: '<path d="M5 4l15 8-15 8 4-8Z" fill="currentColor" stroke="none"/>',
+    doubleChevron: '<path d="m4 5 6 7-6 7m9-14 6 7-6 7" stroke-width="3.2"/>',
+    blockArrow: '<path d="M2 8h12V3l8 9-8 9v-5H2Z" fill="currentColor" stroke="none"/>'
   };
-  var shapeLabels = { rect: "矩形", ellipse: "椭圆", triangle: "三角形", diamond: "菱形", star: "星形", line: "直线", arrow: "线箭头", blockArrow: "块箭头" };
-  var shapePalette = Object.entries(shapeIcons).map(
-    ([kind, drawing]) => `<button type="button" data-act="shape-insert" data-shape-kind="${kind}" title="${shapeLabels[kind]}" aria-label="${shapeLabels[kind]}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${drawing}</svg></button>`
-  ).join("");
+  var basicShapeLabels = { rect: "矩形", ellipse: "椭圆", triangle: "三角形", diamond: "菱形", star: "星形" };
+  var shapeRow = (title, kinds) => `<div class="shape-row" role="group" aria-label="${title}">${kinds.map((kind) => {
+    const label = basicShapeLabels[kind] || arrowLabel(kind);
+    return `<button type="button" data-act="shape-insert" data-shape-kind="${kind}" title="${label}" aria-label="${label}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${shapeIcons[kind]}</svg></button>`;
+  }).join("")}</div>`;
+  var shapePalette = shapeRow("基础形状", Object.keys(basicShapeLabels)) + shapeRow("连接线", connectorKinds) + shapeRow("箭头形状", arrowShapeKinds);
   var numberStepper = (input, up, down, name) => `<div class="number-stepper">${input}<div class="number-steps"><button type="button" data-act="${up}" title="增加${name}" aria-label="增加${name}">${icon("ChevronUp")}</button><button type="button" data-act="${down}" title="减小${name}" aria-label="减小${name}">${icon("ChevronDown")}</button></div></div>`;
   function toolbarHTML({ HANDLES, WORKSPACE = false }) {
     const keys = shortcutLabels(navigator.platform);
@@ -2587,7 +2790,7 @@ property of their respective owners.
   }
 
   // html-design/src/drafts.js
-  function createDrafts(path) {
+  function createDrafts(path2) {
     let dbPromise;
     const id = crypto.randomUUID();
     function db() {
@@ -2607,10 +2810,10 @@ property of their respective owners.
       });
     }
     return {
-      put: (html, revision) => run("readwrite", (s) => s.put({ id, path, html, revision, updated: Date.now() })),
+      put: (html, revision) => run("readwrite", (s) => s.put({ id, path: path2, html, revision, updated: Date.now() })),
       remove: (draftId = id) => run("readwrite", (s) => s.delete(draftId)),
       async latest() {
-        return (await run("readonly", (s) => s.getAll())).filter((d) => d.path === path).sort((a, b) => b.updated - a.updated)[0];
+        return (await run("readonly", (s) => s.getAll())).filter((d) => d.path === path2).sort((a, b) => b.updated - a.updated)[0];
       }
     };
   }
@@ -2848,7 +3051,7 @@ property of their respective owners.
         opening = false;
       }
     }
-    async function withLease(run, { kind = "review", valid = () => true, stillCurrent = () => true } = {}) {
+    async function withLease(run, { kind = "review", valid: valid2 = () => true, stillCurrent = () => true } = {}) {
       if (!canAct()) throw new Error("连接或交接暂不可用，请稍后再试");
       if (prepareReview(kind) === false) throw new Error("请先确认或取消未完成的输入，再处理");
       let expectedRevision = revision;
@@ -2861,7 +3064,7 @@ property of their respective owners.
       };
       const check = (latest) => {
         current();
-        if (latest.revision !== expectedRevision || !valid()) {
+        if (latest.revision !== expectedRevision || !valid2()) {
           stale = latest.revision !== revision;
           throw new Error("修改或审阅已有更新，请重新选择；当前内容保持不变");
         }
@@ -2894,7 +3097,7 @@ property of their respective owners.
           current();
           if (pending || locked || role !== "owner" || dirty) throw new Error("当前状态已变化，请重新选择");
         }
-        if (isBusy() || kind === "review" && hasPendingSource() || !valid()) throw new Error("当前状态已变化，请重新选择");
+        if (isBusy() || kind === "review" && hasPendingSource() || !valid2()) throw new Error("当前状态已变化，请重新选择");
         frozen = false;
         return await run({ expectedRevision, signal });
       } catch (error) {
@@ -2966,12 +3169,12 @@ property of their respective owners.
           return result;
         }, { stillCurrent, valid: () => review.generation === expectedGeneration && review.scope === expectedScope && (scope === "all" || review.items.some((i) => i.id === scope)) });
       },
-      async pageAction(apply, valid, rename = false) {
+      async pageAction(apply, valid2, rename = false) {
         return withLease(async () => {
           apply();
           await flush(true);
           if (managed && dirty) throw new Error("修改已保留，请重试保存或下载副本");
-        }, { kind: rename ? "rename" : "page", valid });
+        }, { kind: rename ? "rename" : "page", valid: valid2 });
       },
       async save() {
         if (!managed) {
@@ -3167,7 +3370,7 @@ property of their respective owners.
     const workspace = createWorkspaceView({ S, root, stage, ui, withAll, activate(b) {
       finishEditing("pan");
       currentPage(b);
-    }, single: () => view(false) });
+    }, single: () => view2(false) });
     host.toggleAttribute("data-workspace-enabled", workspace.enabled);
     const workspaceActive = () => workspace.active();
     const clamp3 = (z) => Math.max(0.1, Math.min(4, Math.round(z * 1e3) / 1e3));
@@ -3250,7 +3453,7 @@ property of their respective owners.
       S.fit = false;
       drawViewport();
     }
-    function view(on) {
+    function view2(on) {
       if (!workspace.enabled || S.playing) return;
       if (S.drag) {
         S.drag.cancel?.();
@@ -3489,7 +3692,7 @@ property of their respective owners.
       },
       { passive: false, capture: true }
     );
-    return { zoom, fit, step, refresh, bounds, preview, stop, workspaceActive, view, focusCurrent, boardAt: workspace.boardAt, highlight: workspace.highlight };
+    return { zoom, fit, step, refresh, bounds, preview, stop, workspaceActive, view: view2, focusCurrent, boardAt: workspace.boardAt, highlight: workspace.highlight };
   }
 
   // html-design/src/artboard-size.js
@@ -3667,7 +3870,7 @@ property of their respective owners.
     };
     return clone(board);
   }
-  function geometry(board) {
+  function geometry2(board) {
     const reference = board.getBoundingClientRect();
     const scaleX = reference.width / board.offsetWidth, scaleY = reference.height / board.offsetHeight;
     const frameOf = (rect) => [(rect.x - reference.x) / scaleX, (rect.y - reference.y) / scaleY, rect.width / scaleX, rect.height / scaleY];
@@ -3688,7 +3891,7 @@ property of their respective owners.
     const copy = clonePage(board, true, board.baseURI);
     const style2 = getComputedStyle(board);
     for (const key of ["width", "height"]) copy.style.setProperty(key, style2.getPropertyValue(key));
-    const data = JSON.stringify({ version: 1, html: copy.outerHTML, layout: geometry(board) });
+    const data = JSON.stringify({ version: 1, html: copy.outerHTML, layout: geometry2(board) });
     if (data.length > limit) throw new Error("此页内容过大，无法复制到剪贴板");
     return data;
   }
@@ -3707,7 +3910,7 @@ property of their respective owners.
     return { page, layout: wire.layout };
   }
   function verifyPage(board, layout2) {
-    const actual = geometry(board);
+    const actual = geometry2(board);
     const differs = (frame, expected) => !!frame !== !!expected || frame?.some((value, j) => !Number.isFinite(value) || Math.abs(value - expected[j]) > 2);
     if (actual.length !== layout2.length || actual.some(({ frame, paint, text }, i) => {
       const expected = layout2[i];
@@ -4052,10 +4255,10 @@ property of their respective owners.
       );
       menuBoard = null;
     }
-    function execute(nodes, apply, valid = () => true, rename2 = false) {
+    function execute(nodes, apply, valid2 = () => true, rename2 = false) {
       if (!writable()) return Promise.reject(new Error("当前暂不可操作，请等待同步或 AI 修改结束"));
       const ids = nodes.map((n) => n?.dataset.artboard || null), find = (id) => id ? boards().find((b) => b.dataset.artboard === id) : null;
-      return submit(() => apply(...ids.map(find)), () => valid() && ids.every((id) => !id || !!find(id)), rename2);
+      return submit(() => apply(...ids.map(find)), () => valid2() && ids.every((id) => !id || !!find(id)), rename2);
     }
     const action = (fn, b = target()) => execute([b], (node) => fn(node)).catch(() => {
     });
@@ -8590,7 +8793,7 @@ property of their respective owners.
     blockArrow: "块箭头"
   };
   var clamp2 = (n, min, max) => Math.min(max, Math.max(min, Number(n) || 0));
-  var color = (value, fallback) => /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : fallback;
+  var color2 = (value, fallback) => /^#[0-9a-fA-F]{6}$/.test(value || "") ? value : fallback;
   var starPoints = (inner, inset, width, height) => {
     const points = Array.from({ length: 10 }, (_, i) => {
       const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? inner : 50;
@@ -8619,7 +8822,7 @@ property of their respective owners.
     const d = `M${first.start} Q${first.x},${first.y} ${first.end} ` + rest.map((c) => `L${c.start} Q${c.x},${c.y} ${c.end}`).join(" ") + ` L${first.start}Z`;
     return `<path d="${d}" ${attrs2}/>`;
   };
-  function shapeGeometry(kind, fill, stroke, sw, adjust, radius, width, height) {
+  function shapeGeometry2(kind, fill, stroke, sw, adjust, radius, width, height) {
     const edge = Math.min(sw / 2, (width - 1) / 2, (height - 1) / 2);
     const midX = width / 2, midY = height / 2;
     const tipX = width - edge, bottom = height - edge;
@@ -8629,7 +8832,7 @@ property of their respective owners.
     const outline = `stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"`;
     const filled = `fill="${fill}" ${outline}`;
     const lineStyle = `fill="none" stroke="${stroke}" stroke-width="${Math.max(1, sw)}" stroke-linecap="round" stroke-linejoin="round"`;
-    const geometry2 = {
+    const geometry3 = {
       rect: `<rect x="${edge}" y="${edge}" width="${width - 2 * edge}" height="${height - 2 * edge}" rx="${radius}" ${filled}/>`,
       ellipse: `<ellipse cx="${midX}" cy="${midY}" rx="${midX - edge}" ry="${midY - edge}" ${filled}/>`,
       triangle: roundedPolygon(`${midX},${edge} ${tipX},${bottom} ${edge},${bottom}`, radius, filled),
@@ -8639,24 +8842,25 @@ property of their respective owners.
       arrow: `<path d="M${edge} ${midY}H${tipX} M${width * (190 - adjust) / 200} ${edge}L${tipX} ${midY}L${width * (190 - adjust) / 200} ${bottom}" ${lineStyle}/>`,
       blockArrow: roundedPolygon(`${edge},${shaftTop} ${headX},${shaftTop} ${headX},${edge} ${tipX},${midY} ${headX},${bottom} ${headX},${shaftBottom} ${edge},${shaftBottom}`, radius, filled)
     };
-    return geometry2[kind] || "";
+    return geometry3[kind] || "";
   }
   function renderShape(el, size) {
     const endpoints = readLineArrow(el);
     if (endpoints) return renderLineArrow(el, endpoints);
     const kind = el.dataset.shape;
-    const defaults = dimensions(kind);
+    const defaults2 = dimensions(kind);
     const style2 = el.isConnected ? getComputedStyle(el) : el.style;
-    const width = dimension(size?.width ?? parseFloat(style2.width), defaults.width);
-    const height = dimension(size?.height ?? parseFloat(style2.height), defaults.height);
+    const width = dimension(size?.width ?? parseFloat(style2.width), defaults2.width);
+    const height = dimension(size?.height ?? parseFloat(style2.height), defaults2.height);
+    if (isArrowShape(el)) return renderArrowShape(el, width, height);
     el.setAttribute("viewBox", viewBox(width, height));
     el.setAttribute("preserveAspectRatio", "none");
-    const fill = color(el.dataset.shapeFill, "#86868b");
-    const stroke = color(el.dataset.shapeStroke, "#86868b");
+    const fill = color2(el.dataset.shapeFill, "#86868b");
+    const stroke = color2(el.dataset.shapeStroke, "#86868b");
     const sw = clamp2(el.dataset.shapeWidth ?? defaultStrokeWidth(kind), 0, 16);
     const adjust = clamp2(el.dataset.shapeAdjust ?? 20, 0, 50);
     const radius = clamp2(el.dataset.shapeRadius ?? (kind === "rect" ? adjust : 0), 0, 50);
-    el.innerHTML = shapeGeometry(kind, fill, stroke, sw, adjust, radius, width, height);
+    el.innerHTML = shapeGeometry2(kind, fill, stroke, sw, adjust, radius, width, height);
   }
   function makeShape(kind, id) {
     if (!SHAPE_NAMES[kind]) return null;
@@ -8848,10 +9052,10 @@ property of their respective owners.
           clear();
           if (!matches.length) return;
           const paths = ["guide-halo", "guide-line"].map((cls) => {
-            const path = document.createElementNS(svg.namespaceURI, "path");
-            path.setAttribute("class", cls);
-            svg.append(path);
-            return path;
+            const path2 = document.createElementNS(svg.namespaceURI, "path");
+            path2.setAttribute("class", cls);
+            svg.append(path2);
+            return path2;
           });
           const labels = matches.filter((match) => match.kind === "spacing").flatMap((match) => [0, 1].map(() => {
             const group = document.createElementNS(svg.namespaceURI, "g");
@@ -8907,7 +9111,7 @@ property of their respective owners.
               ) + pad;
               return vertical ? `M${x(at)},${y(start)}V${y(end)}` : `M${x(start)},${y(at)}H${x(end)}`;
             }).join("");
-            paths.forEach((path) => path.setAttribute("d", segments));
+            paths.forEach((path2) => path2.setAttribute("d", segments));
           };
           redraw();
         }
@@ -9443,8 +9647,8 @@ property of their respective owners.
             if (flowStyle2 == null) el.removeAttribute("data-flow-style");
             else el.setAttribute("data-flow-style", flowStyle2);
             if (style2 == null) {
-              const attr = el.getAttributeNode("style");
-              if (attr) el.removeAttributeNode(attr);
+              const attr2 = el.getAttributeNode("style");
+              if (attr2) el.removeAttributeNode(attr2);
             } else el.setAttribute("style", style2);
           }
           alert(error.message || "手动模式转换失败，已恢复原页面。");
@@ -9689,6 +9893,7 @@ property of their respective owners.
           selBox.classList.toggle("typing", !!S.text);
           selBox.classList.toggle("multiple", S.selection.length > 1);
           selBox.classList.toggle("group", S.selection.length === 1 && isGroup(el));
+          selBox.classList.toggle("arrow-length", S.selection.length === 1 && arrowResizeMode(el) === "length");
           selBox.classList.toggle("text-box", S.selection.length === 1 && isTextObject(el));
         }
         positionRotation();
@@ -9819,6 +10024,7 @@ property of their respective owners.
         const media = el.matches(MEDIA), text = isTextObject(el);
         const metrics = text && dir.length === 2 ? textMetrics(el) : null;
         const before = snap(metrics ? metrics.map((m) => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches("svg[data-shape]"));
+        const arrowMode = arrowResizeMode(el), initialArrowScale = arrowMode === "uniform" && arrowScale(el);
         const hp = media || el.style.height || text && dir === "s" ? "height" : "minHeight";
         const x0 = e.clientX, y0 = e.clientY;
         let g = initial, p = getPos(el), anchor, moved = false;
@@ -9839,7 +10045,14 @@ property of their respective owners.
             if (dir.includes("w")) w -= dx;
             if (dir.includes("s")) h += dy;
             if (dir.includes("n")) h -= dy;
-            if (metrics) {
+            if (arrowMode) {
+              if (arrowMode === "uniform" && dir.length === 2) {
+                const k = (w * w0 + h * h0) / (w0 * w0 + h0 * h0);
+                w = w0 * k;
+                h = h0 * k;
+              }
+              ({ w, h } = resizeArrowShape(el, w, h, g, arrowMode, initialArrowScale));
+            } else if (metrics) {
               const sx = dir.includes("w") ? -1 : 1, sy = dir.includes("n") ? -1 : 1;
               const k = Math.max(
                 6 / Math.min(...metrics.map((m) => m.font)),
@@ -9861,8 +10074,8 @@ property of their respective owners.
               el.style.minHeight = "0px";
               el.style.maxHeight = "none";
             }
-            if (dir !== "n" && dir !== "s") el.style.width = Math.round(Math.max(8, w) * 1e3) / 1e3 + "px";
-            if (dir !== "e" && dir !== "w") {
+            if (arrowMode || dir !== "n" && dir !== "s") el.style.width = Math.round(Math.max(8, w) * 1e3) / 1e3 + "px";
+            if (arrowMode || dir !== "e" && dir !== "w") {
               el.style[hp] = Math.round(Math.max(8, h) * 1e3) / 1e3 + "px";
               if (el.matches("[data-crop-frame]")) cropImage(el).style.setProperty("height", "100%", "important");
             }
@@ -10257,11 +10470,11 @@ property of their respective owners.
       function disarmLineArrow() {
         root.removeAttribute("data-editor-arrow");
       }
-      function armLineArrow() {
+      function armLineArrow(kind) {
         endText();
         select(null);
-        root.setAttribute("data-editor-arrow", "");
-        toast("拖动绘制线箭头 · Esc 取消");
+        root.dataset.editorArrow = kind;
+        toast(`拖动绘制${arrowLabel(kind)} · Esc 取消`);
       }
       function anchorLineArrowBoard(board) {
         if (getComputedStyle(board).position !== "static") return true;
@@ -10275,6 +10488,7 @@ property of their respective owners.
         });
       }
       function startLineArrow(e, board) {
+        const kind = root.dataset.editorArrow;
         disarmLineArrow();
         if (e.button !== 0 || !board || !canMutate()) return;
         const g = elementGeometry(board);
@@ -10288,7 +10502,7 @@ property of their respective owners.
         origin2.x += g.cx;
         origin2.y += g.cy;
         const point = (event) => inverseDelta(g.matrix, event.clientX - origin2.x, event.clientY - origin2.y);
-        const start = point(e), preview = makeLineArrow();
+        const start = point(e), preview = makeLineArrow(kind);
         const { a, b, c, d } = g.matrix;
         Object.assign(preview.style, {
           position: "fixed",
@@ -10322,7 +10536,7 @@ property of their respective owners.
               apply(before);
               return toast("绘制线箭头会改变此页对象的位置，已保留原样", 4500);
             }
-            const arrow = makeLineArrow(), corner = setLineArrow(arrow, start, end);
+            const arrow = makeLineArrow(kind), corner = setLineArrow(arrow, start, end);
             arrow.dataset.el = elementId(board, "shape");
             setPos(arrow, { abs: true }, corner.x, corner.y);
             if (!needsAnchor) insertEl(arrow, board, null);
@@ -10350,8 +10564,8 @@ property of their respective owners.
       function startArrowEndpoint(e, index) {
         const el = S.sel, points = readLineArrow(el);
         if (e.button !== 0 || S.selection.length !== 1 || !points || !canMutate()) return;
-        const geometry2 = elementGeometry(el);
-        if (!geometry2.supported) return toast("这种变换暂不支持编辑线箭头端点");
+        const geometry3 = elementGeometry(el);
+        if (!geometry3.supported) return toast("这种变换暂不支持编辑线箭头端点");
         const b = el.closest("[data-artboard]"), position = getPos(el), before = snap([el], true);
         const inverse = el.getScreenCTM().inverse();
         const fixed = arrowPoint(el, points[1 - index]), grabbed = arrowPoint(el, points[index]);
@@ -10366,7 +10580,7 @@ property of their respective owners.
             setLineArrow(el, ...ends);
             setPos(el, position, position.x, position.y);
             const opposite = arrowPoint(el, readLineArrow(el)[1 - index]);
-            const delta = inverseDelta(geometry2.parent, fixed.x - opposite.x, fixed.y - opposite.y);
+            const delta = inverseDelta(geometry3.parent, fixed.x - opposite.x, fixed.y - opposite.y);
             setPos(el, position, position.x + delta.x, position.y + delta.y);
             moved = true;
             drawSel();
@@ -10383,14 +10597,20 @@ property of their respective owners.
       function addShape(kind) {
         const b = activeBoard();
         if (!b || !visible(b) || !persistence?.canEdit()) return;
-        if (kind === "arrow") {
-          armLineArrow();
+        if (connectorKinds.includes(kind)) {
+          armLineArrow(kind);
           return;
         }
         endText();
-        const el = makeShape(kind, elementId(b, "shape"));
+        const id = elementId(b, "shape");
+        let el;
+        if (arrowShapeKinds.includes(kind)) {
+          const template = document.createElement("template");
+          template.innerHTML = arrowShapeMarkup({ id, kind });
+          el = template.content.firstElementChild;
+        } else el = makeShape(kind, id);
         if (!el) return;
-        placeNew(el, b, kind === "star" ? 132 : 220, kind === "line" ? 8 : kind === "arrow" ? 44 : 132);
+        placeNew(el, b, parseFloat(el.style.width), parseFloat(el.style.height));
         select(el);
       }
       function addImage(src) {
@@ -10609,8 +10829,8 @@ property of their respective owners.
         alignButton.innerHTML = icon(["AlignLeft", "AlignCenter", "AlignRight", "AlignJustify"][index]);
         alignButton.title = `${labels[index]}；点击切换为${labels[(index + 1) % 4]}`;
         alignButton.setAttribute("aria-label", `文字对齐：${alignButton.title}`);
-        const color2 = getComputedStyle(el.contains(at) ? at : el).color;
-        $(".color-swatch").style.background = color2;
+        const color3 = getComputedStyle(el.contains(at) ? at : el).color;
+        $(".color-swatch").style.background = color3;
       }
       function placeTbar() {
         const el = S.sel, show = S.editing && !S.playing && !crop.active && el?.isConnected && visible(el);
@@ -10647,16 +10867,16 @@ property of their respective owners.
         $(".image-tools").hidden = !image;
         const shape = !multi && el.matches("svg[data-shape]");
         $(".shape-tools").hidden = !shape;
-        $(".shape-more-section").hidden = !shape || !shapeHasAdjust(el.dataset.shape) || !!readLineArrow(el);
+        $(".shape-more-section").hidden = !shape || !shapeHasAdjust(el.dataset.shape) || isArrowShape(el) || !!readLineArrow(el);
         if (shape) {
           for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust, radius: el.dataset.shapeRadius ?? (el.dataset.shape === "rect" ? el.dataset.shapeAdjust : "0") })) {
             const input = $(`[data-shape-prop=${prop}]`);
             if (ui.activeElement !== input) input.value = value;
           }
-          $(".shape-color").hidden = !shapeHasFill(el.dataset.shape);
+          $(".shape-fill-color").hidden = el.hasAttribute("data-shape-arrow") ? !arrowHasFill(el) : !shapeHasFill(el.dataset.shape);
           $(".shape-fill-color .shape-swatch").style.background = el.dataset.shapeFill;
           $(".shape-stroke-color .shape-swatch").style.borderColor = el.dataset.shapeStroke;
-          $(".shape-radius").hidden = !shapeHasRadius(el.dataset.shape);
+          $(".shape-radius").hidden = !isArrowShape(el) && el.dataset.shapeRoute !== "elbow" && !shapeHasRadius(el.dataset.shape);
           $(".shape-adjust").firstChild.textContent = { star: "尖角", arrow: "箭头", blockArrow: "箭头" }[el.dataset.shape] || "形状调整";
         }
         if (image) {
@@ -11123,15 +11343,15 @@ property of their respective owners.
         const prop = colorTarget === "fill" ? "shapeFill" : "shapeStroke";
         return hexColor(S.sel?.dataset[prop]) || "#111111";
       }
-      function colorButton(color2, selected) {
+      function colorButton(color3, selected) {
         const button2 = document.createElement("button");
         button2.type = "button";
         button2.className = "palette-swatch";
-        button2.dataset.paletteColor = color2;
-        button2.setAttribute("aria-label", color2);
-        button2.setAttribute("aria-pressed", String(color2 === selected));
-        button2.title = color2;
-        button2.style.background = color2;
+        button2.dataset.paletteColor = color3;
+        button2.setAttribute("aria-label", color3);
+        button2.setAttribute("aria-pressed", String(color3 === selected));
+        button2.title = color3;
+        button2.style.background = color3;
         return button2;
       }
       function renderColorPalette() {
@@ -11146,10 +11366,10 @@ property of their respective owners.
         add.setAttribute("aria-label", "自定义颜色");
         add.innerHTML = icon("Plus");
         current.append(add);
-        documentColors(boards()).forEach((color2) => current.append(colorButton(color2, selected)));
+        documentColors(boards()).forEach((color3) => current.append(colorButton(color3, selected)));
         const recommended = $(".palette-recommended");
         recommended.replaceChildren();
-        recommendedColors.flat().forEach((color2) => recommended.append(colorButton(color2, selected)));
+        recommendedColors.flat().forEach((color3) => recommended.append(colorButton(color3, selected)));
         $(".palette-main").hidden = false;
         $(".palette-custom").hidden = true;
       }
@@ -11159,20 +11379,20 @@ property of their respective owners.
         renderColorPalette();
         openMenu("colors", button2);
       }
-      function applyColor(color2) {
+      function applyColor(color3) {
         if (!canMutate() || !S.sel || !colorTarget) return;
-        if (colorTarget === "text") fmt("color", color2);
+        if (colorTarget === "text") fmt("color", color3);
         else {
           const input = $(`[data-shape-prop=${colorTarget}]`);
-          input.value = color2;
+          input.value = color3;
           previewShapeParam(input);
           finishShapeParam(input);
         }
         closeMenus();
       }
       function syncCustomColor() {
-        const color2 = hsvToHex(customColor.h, customColor.s, customColor.v);
-        $(".palette-hex").value = color2;
+        const color3 = hsvToHex(customColor.h, customColor.s, customColor.v);
+        $(".palette-hex").value = color3;
         $(".palette-hex-error").hidden = true;
         $(".palette-sv").style.setProperty("--palette-hue", `hsl(${customColor.h} 100% 50%)`);
         $(".palette-cursor").style.left = `${customColor.s * 100}%`;
@@ -11210,21 +11430,21 @@ property of their respective owners.
       });
       $(".palette-hex").addEventListener("input", (event) => {
         $(".palette-hex-error").hidden = true;
-        const color2 = hexColor(event.target.value);
-        if (color2) {
-          customColor = hexToHsv(color2);
+        const color3 = hexColor(event.target.value);
+        if (color3) {
+          customColor = hexToHsv(color3);
           syncCustomColor();
         }
       });
       $(".palette-hex-form").addEventListener("submit", (event) => {
         event.preventDefault();
         const value = $(".palette-hex").value.trim();
-        const color2 = /^#?[0-9a-f]{6}$/i.test(value) ? hexColor(value.startsWith("#") ? value : `#${value}`) : null;
-        if (!color2) {
+        const color3 = /^#?[0-9a-f]{6}$/i.test(value) ? hexColor(value.startsWith("#") ? value : `#${value}`) : null;
+        if (!color3) {
           $(".palette-hex-error").hidden = false;
           return;
         }
-        applyColor(color2);
+        applyColor(color3);
       });
       function imageFit(value) {
         crop.finish();
@@ -11762,10 +11982,10 @@ property of their respective owners.
         select,
         endText,
         writable: () => !!persistence?.canManagePages() && !S.playing,
-        async submit(apply2, valid, rename) {
+        async submit(apply2, valid2, rename) {
           const wasEditing = S.editing;
           try {
-            return await persistence.pageAction(apply2, valid, rename);
+            return await persistence.pageAction(apply2, valid2, rename);
           } catch (error) {
             toast(error.message, 6e3);
             throw error;
@@ -12028,17 +12248,17 @@ property of their respective owners.
         viewport.refresh();
       });
       try {
-        const view = JSON.parse(sessionStorage.getItem(viewKey) || "null");
+        const view2 = JSON.parse(sessionStorage.getItem(viewKey) || "null");
         sessionStorage.removeItem(viewKey);
-        if (view) {
-          editRequested = !!view.editRequested;
+        if (view2) {
+          editRequested = !!view2.editRequested;
           setCurrent(
-            boards().find((b) => b.dataset.artboard === view.page) || boards()[0]
+            boards().find((b) => b.dataset.artboard === view2.page) || boards()[0]
           );
-          S.fit = view.fit;
-          view.fit ? zoomFit() : applyZoom(view.zoom);
+          S.fit = view2.fit;
+          view2.fit ? zoomFit() : applyZoom(view2.zoom);
           markActive();
-          if (view.notice) toast(view.notice, 6e3);
+          if (view2.notice) toast(view2.notice, 6e3);
         }
       } catch {
       }

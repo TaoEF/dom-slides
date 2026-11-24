@@ -1,4 +1,5 @@
-import { makeLineArrow, minArrowLength, readLineArrow, setLineArrow } from "./line-arrow.js";
+import { arrowHasFill, arrowLabel, arrowResizeMode, arrowScale, arrowShapeKinds, arrowShapeMarkup,
+  connectorKinds, isArrowShape, makeLineArrow, minArrowLength, readLineArrow, resizeArrowShape, setLineArrow } from "./line-arrow.js";
 import { createWorkspaceTransfer } from "./workspace-transfer.js";
 import { paintedDiv } from "./painted-container.js";
 import { portableHTML } from "./portable-html.js";
@@ -745,6 +746,7 @@ import {
         selBox.classList.toggle("typing", !!S.text);
         selBox.classList.toggle("multiple", S.selection.length > 1);
         selBox.classList.toggle("group", S.selection.length === 1 && isGroup(el));
+        selBox.classList.toggle("arrow-length", S.selection.length === 1 && arrowResizeMode(el) === "length");
         selBox.classList.toggle("text-box", S.selection.length === 1 && isTextObject(el));
       }
       positionRotation();
@@ -891,6 +893,7 @@ import {
       const media = el.matches(MEDIA), text = isTextObject(el);
       const metrics = text && dir.length === 2 ? textMetrics(el) : null;
       const before = snap(metrics ? metrics.map(m => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches('svg[data-shape]'));
+      const arrowMode = arrowResizeMode(el), initialArrowScale = arrowMode === 'uniform' && arrowScale(el);
       const hp = media || el.style.height || (text && dir === 's') ? 'height' : 'minHeight';
       const x0 = e.clientX, y0 = e.clientY;
       let g = initial, p = getPos(el), anchor, moved = false;
@@ -908,7 +911,13 @@ import {
           if (dir.includes('w')) w -= dx;
           if (dir.includes('s')) h += dy;
           if (dir.includes('n')) h -= dy;
-          if (metrics) {
+          if (arrowMode) {
+            if (arrowMode === 'uniform' && dir.length === 2) {
+              const k = (w*w0 + h*h0) / (w0*w0 + h0*h0);
+              w = w0*k; h = h0*k;
+            }
+            ({w,h} = resizeArrowShape(el,w,h,g,arrowMode,initialArrowScale));
+          } else if (metrics) {
             const sx = dir.includes('w') ? -1 : 1, sy = dir.includes('n') ? -1 : 1;
             const k = Math.max(6 / Math.min(...metrics.map(m => m.font)), 8 / w0, 8 / h0,
               1 + (sx * dx * w0 + sy * dy * h0) / (w0 * w0 + h0 * h0));
@@ -919,8 +928,8 @@ import {
           }
           el.style.boxSizing = 'border-box'; el.style.maxWidth = 'none';
           if (text && dir === 's') { el.style.minHeight = '0px'; el.style.maxHeight = 'none'; }
-          if (dir !== 'n' && dir !== 's') el.style.width = Math.round(Math.max(8, w) * 1000) / 1000 + 'px';
-          if (dir !== 'e' && dir !== 'w') { el.style[hp] = Math.round(Math.max(8, h) * 1000) / 1000 + 'px'; if (el.matches('[data-crop-frame]')) cropImage(el).style.setProperty('height','100%','important'); }
+          if (arrowMode || dir !== 'n' && dir !== 's') el.style.width = Math.round(Math.max(8, w) * 1000) / 1000 + 'px';
+          if (arrowMode || dir !== 'e' && dir !== 'w') { el.style[hp] = Math.round(Math.max(8, h) * 1000) / 1000 + 'px'; if (el.matches('[data-crop-frame]')) cropImage(el).style.setProperty('height','100%','important'); }
           if (text && dir.length === 1 && el.scrollHeight > el.clientHeight + 1) {
             el.style.height = 'auto';
             el.style.blockSize = 'auto';
@@ -1281,11 +1290,11 @@ import {
     function disarmLineArrow() {
       root.removeAttribute('data-editor-arrow');
     }
-    function armLineArrow() {
+    function armLineArrow(kind) {
       endText();
       select(null);
-      root.setAttribute('data-editor-arrow', '');
-      toast('拖动绘制线箭头 · Esc 取消');
+      root.dataset.editorArrow = kind;
+      toast(`拖动绘制${arrowLabel(kind)} · Esc 取消`);
     }
     function anchorLineArrowBoard(board) {
       if (getComputedStyle(board).position !== 'static') return true;
@@ -1299,6 +1308,7 @@ import {
       });
     }
     function startLineArrow(e, board) {
+      const kind = root.dataset.editorArrow;
       disarmLineArrow();
       if (e.button !== 0 || !board || !canMutate()) return;
       const g = elementGeometry(board);
@@ -1309,7 +1319,7 @@ import {
         -g.h / 2 + parseFloat(cs.borderTopWidth) - board.scrollTop);
       origin.x += g.cx; origin.y += g.cy;
       const point = event => inverseDelta(g.matrix, event.clientX - origin.x, event.clientY - origin.y);
-      const start = point(e), preview = makeLineArrow();
+      const start = point(e), preview = makeLineArrow(kind);
       const {a, b, c, d} = g.matrix;
       Object.assign(preview.style, {
         position: 'fixed', transformOrigin: '0 0', transform: `matrix(${a},${b},${c},${d},0,0)`,
@@ -1338,7 +1348,7 @@ import {
             apply(before);
             return toast('绘制线箭头会改变此页对象的位置，已保留原样', 4500);
           }
-          const arrow = makeLineArrow(), corner = setLineArrow(arrow, start, end);
+          const arrow = makeLineArrow(kind), corner = setLineArrow(arrow, start, end);
           arrow.dataset.el = elementId(board, 'shape');
           setPos(arrow, {abs: true}, corner.x, corner.y);
           if (!needsAnchor) insertEl(arrow, board, null);
@@ -1386,11 +1396,17 @@ import {
     function addShape(kind) {
       const b = activeBoard();
       if (!b || !visible(b) || !persistence?.canEdit()) return;
-      if (kind === 'arrow') { armLineArrow(); return; }
+      if (connectorKinds.includes(kind)) { armLineArrow(kind); return; }
       endText();
-      const el = makeShape(kind, elementId(b, 'shape'));
+      const id = elementId(b, 'shape');
+      let el;
+      if (arrowShapeKinds.includes(kind)) {
+        const template = document.createElement('template');
+        template.innerHTML = arrowShapeMarkup({id,kind});
+        el = template.content.firstElementChild;
+      } else el = makeShape(kind, id);
       if (!el) return;
-      placeNew(el, b, kind === 'star' ? 132 : 220, kind === 'line' ? 8 : kind === 'arrow' ? 44 : 132);
+      placeNew(el, b, parseFloat(el.style.width), parseFloat(el.style.height));
       select(el);
     }
     function addImage(src) {
@@ -1658,16 +1674,16 @@ import {
       $(".image-tools").hidden = !image;
       const shape = !multi && el.matches('svg[data-shape]');
       $(".shape-tools").hidden = !shape;
-      $('.shape-more-section').hidden = !shape || !shapeHasAdjust(el.dataset.shape) || !!readLineArrow(el);
+      $('.shape-more-section').hidden = !shape || !shapeHasAdjust(el.dataset.shape) || isArrowShape(el) || !!readLineArrow(el);
       if (shape) {
         for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust, radius: el.dataset.shapeRadius ?? (el.dataset.shape === 'rect' ? el.dataset.shapeAdjust : '0') })) {
           const input = $(`[data-shape-prop=${prop}]`);
           if (ui.activeElement !== input) input.value = value;
         }
-        $('.shape-color').hidden = !shapeHasFill(el.dataset.shape);
+        $('.shape-fill-color').hidden = el.hasAttribute('data-shape-arrow') ? !arrowHasFill(el) : !shapeHasFill(el.dataset.shape);
         $('.shape-fill-color .shape-swatch').style.background = el.dataset.shapeFill;
         $('.shape-stroke-color .shape-swatch').style.borderColor = el.dataset.shapeStroke;
-        $('.shape-radius').hidden = !shapeHasRadius(el.dataset.shape);
+        $('.shape-radius').hidden = !isArrowShape(el) && el.dataset.shapeRoute !== 'elbow' && !shapeHasRadius(el.dataset.shape);
         $('.shape-adjust').firstChild.textContent = ({ star: '尖角', arrow: '箭头', blockArrow: '箭头' })[el.dataset.shape] || '形状调整';
       }
       if (image) {

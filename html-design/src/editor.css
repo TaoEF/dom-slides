@@ -641,9 +641,12 @@ button.primary:hover:not(:disabled) {
 .palette-hex-form input { flex:1; min-width:0; height:31px; padding:0 8px; border:1px solid #ddd; border-radius:5px; font:inherit; color:#292929; }
 .color-palette .palette-hex-form button { width:auto; height:31px; padding:0 12px; background:#242424; color:#fff; justify-content:center; }
 .palette-hex-error { margin:7px 0 0; color:#b32727; font-size:11px; }
-.shape-palette { display: grid; grid-template-columns: repeat(4, 42px); gap: 4px; min-width: 0; padding: 8px; }
+.shape-palette { display: grid; gap: 5px; min-width: 0; padding: 8px; }
+.shape-row { display: flex; gap: 3px; }
+.shape-row + .shape-row { border-top: 1px solid #ececec; padding-top: 5px; }
+.sel.arrow-length i:not([data-h="e"]):not([data-h="w"]) { display: none; }
 .shape-palette[hidden] { display: none; }
-.shape-palette button { width: 42px; height: 42px; padding: 9px; justify-content: center; }
+.shape-palette button { width: clamp(32px, 8vw, 39px); height: 38px; padding: 7px; justify-content: center; }
 .shape-palette svg { width: 24px; height: 24px; }
 .shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }
 .shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }

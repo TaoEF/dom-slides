@@ -2,6 +2,7 @@ import { shortcutLabels } from "./shortcuts.js";
 import styles from "./editor.css";
 import { icon, button as b } from "./icons.js";
 import { reviewHTML } from './review.js';
+import { arrowLabel, connectorKinds, arrowShapeKinds } from './line-arrow.js';
 const shapeIcons = {
   rect: '<rect x="3" y="5" width="18" height="14" rx="2"/>',
   ellipse: '<ellipse cx="12" cy="12" rx="9" ry="7"/>',
@@ -10,12 +11,22 @@ const shapeIcons = {
   star: '<path d="m12 2 2.9 6.6 7.1.7-5.4 4.8 1.6 7-6.2-3.7-6.2 3.7 1.6-7L2 9.3l7.1-.7Z"/>',
   line: '<path d="M2 12h20" fill="none"/>',
   arrow: '<path d="M2 12h20m-7-7 7 7-7 7" fill="none"/>',
-  blockArrow: '<path d="M2 8h12V3l8 9-8 9v-5H2Z"/>',
+  arrowDouble: '<path d="M2 12h20M8 6l-6 6 6 6m8-12 6 6-6 6"/>',
+  arrowElbow: '<path d="M2 18h6a3 3 0 0 0 3-3V9a3 3 0 0 1 3-3h8m-5-5 5 5-5 5"/>',
+  triangleHead: '<path d="M6 4l14 8-14 8Z" fill="currentColor" stroke="none"/>',
+  chevron: '<path d="m8 5 7 7-7 7" stroke-width="3.2"/>',
+  thinArrow: '<path d="M3 12h17m-7-7 7 7-7 7" stroke-linecap="square"/>',
+  notched: '<path d="M5 4l15 8-15 8 4-8Z" fill="currentColor" stroke="none"/>',
+  doubleChevron: '<path d="m4 5 6 7-6 7m9-14 6 7-6 7" stroke-width="3.2"/>',
+  blockArrow: '<path d="M2 8h12V3l8 9-8 9v-5H2Z" fill="currentColor" stroke="none"/>',
 };
-const shapeLabels = { rect: '矩形', ellipse: '椭圆', triangle: '三角形', diamond: '菱形', star: '星形', line: '直线', arrow: '线箭头', blockArrow: '块箭头' };
-const shapePalette = Object.entries(shapeIcons).map(([kind, drawing]) =>
-  `<button type="button" data-act="shape-insert" data-shape-kind="${kind}" title="${shapeLabels[kind]}" aria-label="${shapeLabels[kind]}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${drawing}</svg></button>`
-).join('');
+const basicShapeLabels = { rect: '矩形', ellipse: '椭圆', triangle: '三角形', diamond: '菱形', star: '星形' };
+const shapeRow = (title, kinds) => `<div class="shape-row" role="group" aria-label="${title}">${kinds.map(kind => {
+  const label = basicShapeLabels[kind] || arrowLabel(kind);
+  return `<button type="button" data-act="shape-insert" data-shape-kind="${kind}" title="${label}" aria-label="${label}"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${shapeIcons[kind]}</svg></button>`;
+}).join('')}</div>`;
+const shapePalette = shapeRow('基础形状', Object.keys(basicShapeLabels)) +
+  shapeRow('连接线', connectorKinds) + shapeRow('箭头形状', arrowShapeKinds);
 const numberStepper = (input, up, down, name) => `<div class="number-stepper">${input}<div class="number-steps"><button type="button" data-act="${up}" title="增加${name}" aria-label="增加${name}">${icon('ChevronUp')}</button><button type="button" data-act="${down}" title="减小${name}" aria-label="减小${name}">${icon('ChevronDown')}</button></div></div>`;
 export function toolbarHTML({ HANDLES, WORKSPACE = false }) {
   const keys = shortcutLabels(navigator.platform);
