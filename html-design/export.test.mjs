@@ -192,6 +192,25 @@ test('PPTX skips shapes fully outside a clipped scene and keeps an intrinsic bad
   assert.match(badge, /<a:normAutofit/);
 });
 
+test('PPTX keeps a single-line CJK heading native without wrapping other text boxes', async () => {
+  const { xml } = await slideXml(`<!doctype html><html><head><meta charset="utf-8"><style>
+    [data-artboard]{width:960px;height:540px;display:flex;flex-direction:column;align-items:flex-start}
+    h2,p{margin:0;font:700 52px/1.16 "PingFang SC",sans-serif}
+    .narrow{width:156px}
+    </style></head><body><main data-stage><section data-artboard="p1">
+    <h2 data-el="chapter">第一章项目概况</h2>
+    <h2 data-el="wrapped" class="narrow">第二章建设方案</h2>
+    <h2 data-el="hard-break">第三章<br>执行计划</h2>
+    <p data-el="paragraph">现有项目基线</p>
+    </section></main></body></html>`);
+  const chapter = namedShape(xml, 'chapter');
+  assert.match(chapter, /<a:bodyPr[^>]*wrap="none"/);
+  assert.match(chapter, /<a:t>第一章项目概况<\/a:t>/);
+  for (const id of ['wrapped', 'hard-break', 'paragraph']) {
+    assert.match(namedShape(xml, id), /<a:bodyPr[^>]*wrap="square"/);
+  }
+});
+
 test('PPTX uniform rounded cards use one native fill/stroke shape each, with editable reflowing children', async () => {
   const html = `<!doctype html><html><head><style>
     [data-artboard]{width:960px;height:540px;position:relative}

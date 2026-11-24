@@ -71,7 +71,12 @@ test('B02/B03/B04: aggregate baseline survives repeat AI and partial accept befo
   await f.review('accept', 'p1'); assert.equal((await f.current()).revision, revision);
   await f.ai(h => h.replace('margin:0', 'margin:5px'));
   assert.equal((await f.current()).review.scope, 'document');
-  await f.review('undo', 'document');
+  const pending = await readFile(f.file, 'utf8');
+  await assert.rejects(f.review('undo', 'document'), e => e.status === 409 && /明确确认/.test(e.message));
+  await rejected(f.review('undo', 'all'));
+  await rejected(f.review('undo', 'p2', { confirmDocumentUndo: true }));
+  assert.equal(await readFile(f.file, 'utf8'), pending);
+  await f.review('undo', 'document', { confirmDocumentUndo: true });
   const restored = await readFile(f.file, 'utf8');
   assert.match(restored, /p1 AI2/); assert.match(restored, />p2</); assert.match(restored, /margin:0/);
   assert.equal((await f.current()).review.items.length, 0);
@@ -253,7 +258,7 @@ test('H01: page-contained style and stylesheet nodes remain global; manual edits
   await f.ai(h => h.replace('>p2<', '>accepted p2<')); await f.review('accept', 'p2');
   await f.ai(h => h.replace('color:red', 'color:blue'));
   assert.equal((await f.current()).review.scope, 'document');
-  await f.review('undo', 'document'); assert.match(await readFile(f.file, 'utf8'), /accepted p2/);
+  await f.review('undo', 'document', { confirmDocumentUndo: true }); assert.match(await readFile(f.file, 'utf8'), /accepted p2/);
   await f.ai(h => h.replace('color:red', 'color:blue'));
   const stale = await f.current();
   const saved = await f.call('save', { revision: stale.revision, html: (await readFile(f.file, 'utf8')).replace('accepted p2', 'manual p2') });

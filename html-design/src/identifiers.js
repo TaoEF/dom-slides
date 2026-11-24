@@ -13,9 +13,9 @@ export function rekeyDOMIds(tree, prefix) {
     for (const attr of [...node.attributes]) {
       if (["id", "src", "srcset"].includes(attr.name)) continue;
       let value = attr.value;
-      if (["for", "aria-labelledby", "aria-describedby"].includes(attr.name))
+      if (["for", "headers", "aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "aria-flowto", "aria-activedescendant", "aria-details", "aria-errormessage"].includes(attr.name))
         value = value
-          .split(" ")
+          .split(/\s+/)
           .map((id) => ids.get(id) || id)
           .join(" ");
       for (const [before, after] of ordered) {

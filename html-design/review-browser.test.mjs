@@ -90,14 +90,14 @@ test('D01/D04/F04: viewer can read sanitized before; scripts/navigation/forms ca
   await viewer.locator('.review-trigger').click();
   assert.ok(await viewer.locator('[data-review-command=accept-all]').isEnabled());
   let viewerWrites = 0; viewer.on('request', r => { if (/document\/review\/(undo|accept)$/.test(r.url())) viewerWrites++; });
-  await viewer.locator('.review-actions [data-review-command=undo]').focus();
+  await viewer.locator('.review-panel:not([hidden]) [data-review-id=document][data-review-command=undo]').focus();
   assert.equal(viewerWrites, 0, 'focus alone must never write or take editing permission');
   const frame = viewer.frameLocator('iframe[title="AI 修改前，只读预览"]');
   await frame.locator('[data-el=p1-title]').waitFor();
   assert.equal(await frame.locator('script,iframe,object,form,meta[http-equiv=refresh],[onclick],[autofocus]').count(), 0);
   assert.equal(await viewer.evaluate(() => window.baselineRan), undefined);
   assert.equal(await f.page.evaluate(() => window.baselineRan), undefined);
-  await f.show(); await f.page.locator('.review-actions [data-review-command=undo]').focus();
+  await f.show(); await f.action('document', 'undo').focus();
   await f.page.locator('[data-act=export]').evaluate(n => n.click());
   const event = f.page.waitForEvent('download'); await f.page.locator('[data-act=download]').evaluate(n => n.click());
   const download = await event, downloaded = await readFile(await download.path(), 'utf8');
@@ -122,27 +122,48 @@ test('D01/D04/F04: viewer can read sanitized before; scripts/navigation/forms ca
   assert.equal((await fetch(`${origin}/.html-design/reviews/state.json`)).status, 403);
 });
 
-test('F01/F03: deleted page can be restored; global changes expose a single document review; narrow panel remains operable', async t => {
+test('F01/F03: deleted page can be restored; document undo is separated and requires confirmation', async t => {
   const f = await fixture(t, 'deleted'); await f.load();
   await f.ai(h => h.replace(pageHTML('p2', 'Original two'), ''));
   await f.show(); assert.match(await f.row('p2').textContent(), /删除/);
   await f.action('p2', 'undo').click();
   await f.page.locator('.review-summary').waitFor({ state: 'hidden' }); await f.page.locator('.review-actions').waitFor({ state: 'hidden' });
   assert.equal(await f.page.locator('[data-artboard]').count(), 2);
-  await f.ai(h => h.replace('background:#eee', 'background:#ddd'));
+  await f.ai(h => h.replace('background:#eee', 'background:#ddd').replace('Original one', 'AI one').replace('Original two', 'AI two'));
   await f.show(); assert.equal(await f.page.locator('.review-item').count(), 1); assert.match(await f.page.locator('.review-message').textContent(), /整份文档/);
-  await f.action('document', 'undo').hover();
+  assert.ok(await f.page.locator('.review-actions').isHidden());
+  assert.equal(await f.page.locator('.review-actions [data-review-command=undo]').count(), 0);
+  const undo = f.action('document', 'undo');
+  assert.equal(await undo.textContent(), '放弃整份文档修改');
+  await undo.hover();
   await f.page.frameLocator('iframe[title="AI 修改前，只读预览"]').locator('[data-review-projection-target]').waitFor();
   assert.equal(await f.page.frameLocator('iframe[title="AI 修改前，只读预览"]').locator('[data-review-projection-target]').count(), 1, 'document review projects the current page without pretending the action is page-scoped');
   await f.page.setViewportSize({ width: 390, height: 844 });
-  await f.page.waitForFunction(() => {
-    const s = document.querySelector('html-design-editor').shadowRoot, canvas = s.querySelector('.review-actions').getBoundingClientRect();
-    return canvas.x >= 0 && canvas.right <= innerWidth;
-  });
   await f.page.keyboard.press('Escape');
   if (await f.page.locator('.review-panel').isHidden()) await f.page.locator('.review-trigger').click();
   const panel = await f.page.locator('.review-panel').boundingBox(); assert.ok(panel.x >= 0 && panel.x + panel.width <= 390);
-  await f.page.locator('[data-review-command=accept-all]').click(); await f.page.locator('.review-summary').waitFor({ state: 'hidden' }); await f.page.locator('.review-actions').waitFor({ state: 'hidden' });
+  const pending = await readFile(f.file, 'utf8'), writes = [];
+  f.page.on('request', req => {
+    if (req.url().endsWith('/review/undo')) {
+      const { scope, confirmDocumentUndo } = req.postDataJSON();
+      writes.push({ scope, confirmDocumentUndo });
+    }
+  });
+  let question;
+  f.page.once('dialog', dialog => { question = dialog.message(); return dialog.dismiss(); });
+  await undo.click();
+  assert.match(question, /整份文档.*所有尚未接受/);
+  assert.deepEqual(writes, []);
+  assert.equal(await readFile(f.file, 'utf8'), pending);
+  assert.ok(await undo.isVisible());
+  f.page.once('dialog', dialog => dialog.accept());
+  await undo.click();
+  await f.page.locator('.review-summary').waitFor({ state: 'hidden' });
+  const restored = await readFile(f.file, 'utf8');
+  assert.match(restored, /Original one/);
+  assert.match(restored, /Original two/);
+  assert.match(restored, /background:#eee/);
+  assert.deepEqual(writes, [{ scope: 'document', confirmDocumentUndo: true }]);
 });
 
 test('B01/F05: latest unsaved human text is yielded into the actual before baseline', async t => {
@@ -319,7 +340,8 @@ test('I02/I06: controls clamp at fixed pixel size through zoom/pan/sidebar; befo
   // A global dimension change must show the actual old page width, never stretch it to after.
   await f.page.setViewportSize({ width: 1280, height: 844 }); await f.page.locator('[data-act=zoom-fit]').click();
   await f.ai(h => h.replace('width:800px;height:450px', 'width:1000px;height:450px'));
-  await f.page.locator('.review-actions[data-review-scope=document]').waitFor();
+  await f.page.locator('.review-count').filter({ hasText: '整份文档' }).waitFor();
+  await f.show();
   const after = await f.page.locator('[data-artboard=p2]').boundingBox(); await f.action('document', 'undo').hover(); await f.page.locator('.review-before').waitFor({ state: 'visible' });
   const old = await f.page.locator('.review-projection').boundingBox(); assert.ok(old.width < after.width - 50); assert.ok(Math.abs(old.x - after.x) < 1);
 });
@@ -564,7 +586,7 @@ test('L01/L02/L03/L04: page information and status labels remain separate from a
   await f.row('p8').locator('[data-review-command=accept]').click(); await f.page.waitForFunction(()=>document.querySelector('html-design-editor').shadowRoot.querySelectorAll('.review-row').length===2);
   await f.row('p12').locator('[data-review-command=undo]').click(); await f.page.locator('[data-artboard=p12][data-editor-current]').waitFor();
   await f.show(); assert.match(await f.row('p50').locator('.review-name').textContent(),/^第 3 页 ·/);
-  await f.ai(h=>h.replace('background:#eee','background:#ddd')); await f.page.locator('.review-actions[data-review-scope=document]').waitFor(); await f.show();
+  await f.ai(h=>h.replace('background:#eee','background:#ddd')); await f.page.locator('.review-count').filter({hasText:'整份文档'}).waitFor(); await f.show();
   assert.equal(await f.row('document').locator('.review-name').textContent(),'整份文档'); assert.equal(await f.row('document').locator('.review-page').count(),0);
 });
 

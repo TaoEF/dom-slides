@@ -6,7 +6,7 @@ owners:
   - package.json
   - scripts/
   - .github/workflows/ci.yml
-updated: 2026-10-30
+updated: 2026-11-24
 sources:
   - path: package.json
     status: current
@@ -59,6 +59,8 @@ confidence: high
 ## Contracts
 
 `npm run build` 成功后运行 `npm test`。CI 安装锁定依赖与 Chromium，再构建并执行产品和 Wiki 检查。测试写临时目录；不能重建或改写人工编辑稿作为验证手段。
+
+每次发布前使用当次验收稿的最终快照实际导出 PPTX。检查产物能打开、页数、形状类型和关键 XML 参数，再对照渲染验证文字、位置和关键图形尺寸。记录测试环境、字体缺失和仍待 Office 客户端验证的交互。
 
 
 ## Workflows

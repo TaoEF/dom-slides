@@ -19,6 +19,21 @@ export function collectEditableSlide(board) {
     }
     return { x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height, rotation: 0, scale: 1, supported: false };
   };
+  // Parameterized arrows emit a restricted SVG command set. Custom geometry
+  // keeps the same outline native, including rounded corners and repeated heads.
+  const arrowPath = (d, view, box) => {
+    const commands = d?.match(/[MLQZ][^MLQZ]*/g);
+    if (!commands || !view.width || !view.height) return null;
+    const point = (a, b) => ({ x: (a-view.x)*box.w/view.width, y:(b-view.y)*box.h/view.height });
+    const items = commands.map(command => {
+      const kind = command[0], body = command.slice(1).trim(), values = body ? body.split(/\s+/).map(Number) : [];
+      if (values.length !== ({M:2,L:2,Q:4,Z:0})[kind] || !values.every(Number.isFinite)) return null;
+      if (kind === 'Z') return {close:true};
+      if (kind === 'Q') return {...point(values[2],values[3]), control:point(values[0],values[1])};
+      return {...point(...values), moveTo:kind === 'M'};
+    });
+    return items.every(Boolean) ? items : null;
+  };
   const font = (cs, text) => {
     const names = cs.fontFamily.split(',').map(s => s.trim().replace(/^['"]|['"]$/g, ''));
     const cjk = /[\u3400-\u9fff]/.test(text) && names.find(s => /PingFang|YaHei|Noto Sans CJK|Heiti|SimSun/i.test(s));
@@ -166,6 +181,56 @@ export function collectEditableSlide(board) {
       emit(el, { kind: 'image', ...box, name, source: el.currentSrc || el.src, naturalWidth: el.naturalWidth, naturalHeight: el.naturalHeight, fit: cs.objectFit, opacity: Number(cs.opacity), href: el.closest('a')?.href });
     } else if (el.matches('svg[data-shape]')) {
       const kind = el.dataset.shape;
+      const endpoints = el.dataset.shapeEndpoints?.trim().split(/\s+/).map(Number);
+      const connector = ['line','arrow','arrowDouble','arrowElbow'].includes(kind) &&
+        endpoints?.length === 4 && endpoints.every(Number.isFinite);
+      const heads = el.dataset.shapeHeads || (kind === 'line' ? 'none' : 'end');
+      const head = el.dataset.shapeHead || 'open';
+      const hasHead = heads !== 'none' && head !== 'none';
+      const nativeTip = head === 'open' && Number(el.dataset.shapeRepeat ?? 1) === 1;
+      let nativeLine;
+      if (connector && el.dataset.shapeRoute !== 'elbow' && el.dataset.shapeShaft !== 'false' && (!hasHead || nativeTip)) {
+        const ink = el.querySelector('[data-shape-ink]') || el.lastElementChild || el;
+        const stroke = getComputedStyle(ink), strokeWidth = parseFloat(stroke.strokeWidth);
+        // Office sizes its line ends relative to the stroke and in preset
+        // steps. Only use that approximation for the default arrow outline.
+        const defaultHead = Number(el.dataset.shapeHeadLength ?? 16) === 16 &&
+          Number(el.dataset.shapeHeadWidth ?? 18) === 18 &&
+          Number(el.dataset.shapeArrowScale ?? 1) === 1 && strokeWidth === 4;
+        const matrix = el.getScreenCTM();
+        if (matrix) {
+          const [x1, y1, x2, y2] = endpoints;
+          const a = new DOMPoint(x1, y1).matrixTransform(matrix);
+          const b = new DOMPoint(x2, y2).matrixTransform(matrix);
+          const width = strokeWidth * Math.hypot(matrix.a, matrix.b);
+          nativeLine = {kind: 'line', points: [a.x - origin.left, a.y - origin.top, b.x - a.x, b.y - a.y],
+            width, color: cssColor(stroke.stroke),
+            beginArrowType: hasHead && heads === 'both' ? 'arrow' : undefined,
+            endArrowType: hasHead ? 'arrow' : undefined, nativeConnector: true, name};
+          if (!hasHead || defaultHead) {
+            emit(el,nativeLine);
+            continue;
+          }
+        }
+      }
+      // Endpoint arrows saved before the shared DSL have the same ink path,
+      // but do not carry the data-shape-arrow marker.
+      if ((el.dataset.shapeArrow === '1' || connector) && box.supported) {
+        const paths = [...el.querySelectorAll('[data-shape-ink],[data-shape-head-ink]')].map(path => {
+          const styles = getComputedStyle(path), points = arrowPath(path.getAttribute('d'),el.viewBox.baseVal,box);
+          return points && {points, fill:cssColor(styles.fill), stroke:cssColor(styles.stroke),
+            width:parseFloat(styles.strokeWidth)*box.w/el.viewBox.baseVal.width};
+        });
+        if (paths.length && paths.every(Boolean)) {
+          paths.forEach(path => emit(el,{...box,...path,kind:'arrowPath',name}));
+          continue;
+        }
+      }
+      if (nativeLine) {
+        warnings.push(`${name}: 自定义箭头几何无法稳定导出，头部使用原生预设尺寸`);
+        emit(el,nativeLine);
+        continue;
+      }
       const native = { rect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', diamond: 'diamond', star: 'star5', line: 'line', arrow: 'line', blockArrow: 'rightArrow' }[kind];
       const view = el.viewBox.baseVal;
       const radiusScale = view.width && view.height ? Math.min(box.w / view.width, box.h / view.height) : 1;
@@ -249,12 +314,14 @@ export function collectEditableSlide(board) {
       const textRange = document.createRange();
       textRange.selectNodeContents(el);
       const lineRects = [...textRange.getClientRects()].filter(rect => rect.width && rect.height);
-      const intrinsicOneLine = cs.display === 'inline-block' && el.childNodes.length === 1 &&
+      // Office can rewrap a single-line heading measured with browser font metrics.
+      const keepOneLine = (cs.display === 'inline-block' || el.matches('h1,h2,h3,h4,h5,h6,[role="heading"]')) &&
+        el.childNodes.length === 1 &&
         el.firstChild.nodeType === Node.TEXT_NODE && !runs.some(run => run.text.includes('\n')) &&
         lineRects.length === 1;
       if (runs.length) emit(el, {
         kind: 'text', ...box, name, runs, ...baseStyle,
-        nowrap: intrinsicOneLine,
+        nowrap: keepOneLine,
         align: ['left', 'center', 'right', 'justify'].includes(cs.textAlign) ? cs.textAlign : 'left',
         valign: textVertical(el, cs, name, textItems),
         lineHeight: (parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2) * box.scale,
@@ -311,14 +378,23 @@ export async function addEditableSlide({ pptx, slide, data, page, board, context
           : { transparency: 100 },
         rectRadius: item.geometry === 'roundRect' ? px(item.radius) : undefined,
       });
+    } else if (item.kind === 'arrowPath') {
+      const points = item.points.map(point => point.close ? {close:true} : {
+        x:px(point.x), y:px(point.y), moveTo:point.moveTo,
+        ...(point.control ? {curve:{type:'quadratic',x1:px(point.control.x),y1:px(point.control.y)}} : {}),
+      });
+      slide.addShape(pptx.ShapeType.custGeom, {
+        ...position, points, fill:item.fill,
+        line:{color:item.stroke.color,transparency:item.width ? item.stroke.transparency : 100,width:pt(item.width)},
+      });
     } else if (item.kind === 'line') {
       const [x, y, w, h] = item.points;
       // DrawingML extents cannot be negative. Preserve both directed endpoints
       // by translating to the minimum corner and flipping the normalized path.
       slide.addShape(pptx.ShapeType.line, {
         x: px(Math.min(x, x + w)), y: px(Math.min(y, y + h)), w: px(Math.abs(w)), h: px(Math.abs(h)),
-        flipH: w < 0, flipV: h < 0, objectName: `${item.name}-border`,
-        line: { color: item.color.color, transparency: item.color.transparency, width: pt(item.width) },
+        flipH: w < 0, flipV: h < 0, objectName: item.nativeConnector ? item.name : `${item.name}-border`,
+        line: { color: item.color.color, transparency: item.color.transparency, width: pt(item.width), beginArrowType: item.beginArrowType, endArrowType: item.endArrowType },
       });
     } else if (item.kind === 'text') {
       // Explicit segments avoid PptxGenJS treating a trailing newline in a rich run

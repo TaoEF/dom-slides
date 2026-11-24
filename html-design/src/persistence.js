@@ -198,12 +198,14 @@ export function createPersistence({ config, serialize, pause, isBusy, hasPending
       if (!managed) throw new Error('AI 审阅需要本地服务；下载的 HTML 不包含审阅基线');
       return request('review/read', { revision, generation: expectedGeneration, scope });
     },
-    async reviewAction(action, scope, expectedGeneration, stillCurrent = () => true) {
+    async reviewAction(action, scope, expectedGeneration, { stillCurrent = () => true, confirmDocumentUndo = false } = {}) {
       if (!managed) throw new Error('AI 审阅需要本地服务');
       const expectedScope = review.scope;
       return withLease(async ({ expectedRevision, signal }) => {
         const writeGeneration = generation;
-        const result = await request(`review/${action}`, { revision: expectedRevision, generation: expectedGeneration, scope, requestId: crypto.randomUUID() }, signal);
+        const body = { revision: expectedRevision, generation: expectedGeneration, scope, requestId: crypto.randomUUID() };
+        if (confirmDocumentUndo) body.confirmDocumentUndo = true;
+        const result = await request(`review/${action}`, body, signal);
         adopt(result);
         if (result.revision !== revision) {
           if (dirty || generation !== writeGeneration || hasPendingSource() || isBusy()) {

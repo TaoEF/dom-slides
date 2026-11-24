@@ -40,40 +40,42 @@ export function createReview({ ui, persistence, navigate, view, restoreTarget, t
     if (command === 'undo') b.title = item.kind === 'added' ? '放弃新增页面' : '悬停或聚焦查看修改前；点击放弃';
     return b;
   }
-  function actions(container, item, label = false) {
+  function actions(container, item, documentScope = false) {
     container.replaceChildren();
-    if (label) { const title = document.createElement('span'); title.className = 'review-scope'; title.textContent = '整份文档'; container.append(title); }
-    const undo = button('放弃', 'undo', item), accept = button('接受', 'accept', item); accept.className = 'review-accept'; container.append(undo, accept);
+    const undo = button(documentScope ? '放弃整份文档修改' : '放弃', 'undo', item);
+    if (documentScope) undo.title = '悬停或聚焦查看当前页修改前；点击确认后放弃整份文档的待审阅修改';
+    const accept = button('接受', 'accept', item); accept.className = 'review-accept'; container.append(undo, accept);
   }
   function update(next) {
     const changed = next.revision !== state.revision || next.review.generation !== state.review.generation;
     if (changed || next.reviewing || (state.canReview && !next.canReview)) endBefore();
     state = next;
     if (changed) cache.clear();
-    const key = JSON.stringify([state.review.generation, state.review.items]);
+    const documentScope = state.review.scope === 'document';
+    const key = JSON.stringify([state.review.generation, state.review.scope, state.review.items]);
     if (key !== drawn) {
       drawn = key; list.replaceChildren();
       for (const item of state.review.items) {
         const row = document.createElement('div'); row.className = 'review-item review-row'; row.dataset.reviewRow = item.id;
         const title = document.createElement('button'); title.type = 'button'; title.className = 'review-name'; title.title = item.title; title.dataset.reviewCommand = 'locate'; title.dataset.reviewId = item.id;
-        if (state.review.scope === 'document' || item.kind === 'deleted') title.disabled = true;
-        if (state.review.scope !== 'document') { const number = document.createElement('span'); number.className = 'review-page'; number.textContent = `${item.kind === 'deleted' ? '原第' : '第'} ${item.kind === 'deleted' ? item.originalPage : item.currentPage} 页 ·`; title.append(number); }
+        if (documentScope || item.kind === 'deleted') title.disabled = true;
+        if (!documentScope) { const number = document.createElement('span'); number.className = 'review-page'; number.textContent = `${item.kind === 'deleted' ? '原第' : '第'} ${item.kind === 'deleted' ? item.originalPage : item.currentPage} 页 ·`; title.append(number); }
         const name = document.createElement('span'); name.className = 'review-title'; name.textContent = item.title; title.append(name);
         const kind = document.createElement('span'); kind.className = 'review-kind'; kind.textContent = { added: '新增', updated: '修改', deleted: '删除' }[item.kind];
-        const controls = document.createElement('div'); controls.className = 'review-item-actions'; actions(controls, item);
+        const controls = document.createElement('div'); controls.className = 'review-item-actions'; actions(controls, item, documentScope);
         const info = document.createElement('div'); info.className = 'review-info'; info.append(title, kind);
         row.append(info, controls); list.append(row);
       }
     }
-    summary.querySelector('.review-count').textContent = state.review.conflict ? 'AI 审阅异常' : state.review.scope === 'document' ? '整份文档' : `${state.review.items.length} 页修改`;
-    summary.querySelector('.review-message').textContent = state.review.conflict ? '文件在审阅之外发生变化，基线已保留，请下载副本后排查。' : state.review.scope === 'document' ? `整份文档：放弃将恢复全部未接受修改。${state.review.reasons.join('；')}` : state.canReview ? '可直接处理；人工修改并保存某页，会接受该页的 AI 改动。' : '可直接处理；点击后将自动同步编辑权限。';
+    summary.querySelector('.review-count').textContent = state.review.conflict ? 'AI 审阅异常' : documentScope ? '整份文档' : `${state.review.items.length} 页修改`;
+    summary.querySelector('.review-message').textContent = state.review.conflict ? '文件在审阅之外发生变化，基线已保留，请下载副本后排查。' : documentScope ? `放弃将撤回整份文档中所有尚未接受的 AI 修改。${state.review.reasons.join('；')}` : state.canReview ? '可直接处理；人工修改并保存某页，会接受该页的 AI 改动。' : '可直接处理；点击后将自动同步编辑权限。';
     summary.querySelector('[data-review-command=accept-all]').disabled = !enabled();
     position();
     if (!raf && (state.review.items.length || state.review.conflict)) raf = requestAnimationFrame(tick);
   }
   function position() {
     const v = view(), id = v.board?.dataset.artboard || '', review = state.review;
-    const item = review.scope === 'document' ? review.items[0] : review.items.find(i => i.id === id && i.kind !== 'deleted');
+    const item = review.scope === 'pages' ? review.items.find(i => i.id === id && i.kind !== 'deleted') : null;
     const scene = `${id}:${v.playing}:${innerWidth}:${innerHeight}:${v.layoutWidth}:${v.layoutHeight}`;
     if (scene !== lastView) {
       const previous = active, samePage = lastView.split(':')[0] === id;
@@ -84,9 +86,10 @@ export function createReview({ ui, persistence, navigate, view, restoreTarget, t
     summary.hidden = !!v.playing || !showSummary;
     bar.hidden = !!v.playing || !item || review.conflict;
     if (!showSummary) setExpandedSilently(false);
-    if (bar.dataset.reviewId !== item?.id || bar.dataset.reviewScope !== review.scope) {
-      bar.dataset.reviewId = item?.id || ''; bar.dataset.reviewScope = review.scope;
-      if (item) actions(bar, item, review.scope === 'document');
+    if (bar.dataset.reviewId !== (item?.id || '')) {
+      bar.dataset.reviewId = item?.id || '';
+      if (item) actions(bar, item);
+      else bar.replaceChildren();
     }
     for (const b of ui.querySelectorAll('[data-review-command=undo],[data-review-command=accept]')) {
       b.setAttribute('aria-disabled', String(!enabled())); b.disabled = busy || state.reviewing || (b.dataset.reviewCommand === 'accept' && !enabled());
@@ -169,9 +172,18 @@ export function createReview({ ui, persistence, navigate, view, restoreTarget, t
     if (!['undo', 'accept', 'accept-all'].includes(command)) return;
     if (!enabled()) { toast('连接或交接暂不可用，请稍后再试'); return; }
     const item = state.review.items.find(i => i.id === id), initialPage = pageId(), initialEpoch = view().intentEpoch;
+    if (command !== 'accept-all' && !item) return;
+    const expectedGeneration = state.review.generation;
+    const confirmDocumentUndo = command === 'undo' && state.review.scope === 'document';
+    if (confirmDocumentUndo && !confirm('放弃整份文档中所有尚未接受的 AI 修改？此操作可能影响多个页面。')) return;
     endBefore(); busy = true; update(state);
     if (command === 'undo' && item?.kind === 'deleted') restoreTarget(id);
-    try { await persistence().reviewAction(command === 'accept-all' ? 'accept' : command, command === 'accept-all' ? 'all' : id, state.review.generation, () => initialEpoch === view().intentEpoch && initialPage === pageId() && !view().playing); }
+    try {
+      await persistence().reviewAction(command === 'accept-all' ? 'accept' : command, command === 'accept-all' ? 'all' : id, expectedGeneration, {
+        confirmDocumentUndo,
+        stillCurrent: () => initialEpoch === view().intentEpoch && initialPage === pageId() && !view().playing,
+      });
+    }
     catch (error) { toast(error.message, 6000); }
     finally {
       restoreTarget(null); busy = false; update(state);

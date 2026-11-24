@@ -1,6 +1,7 @@
 import { artboardSize, setArtboardSize } from "./artboard-size.js";
 import { icon } from "./icons.js";
 import { rekeyDOMIds } from "./identifiers.js";
+import { capturePage, readPage, verifyPage, PAGE_CLIPBOARD_TYPE } from "./page-clipboard.js";
 export function createPages({
   S,
   root,
@@ -18,6 +19,7 @@ export function createPages({
   submit,
   openMenu,
   closeMenus,
+  toast,
 }) {
   const listUI = ui.querySelector(".thumb-list"),
     thumbs = new Map(),
@@ -32,16 +34,29 @@ export function createPages({
         (b) => Number(b.dataset.artboard?.match(/^p(\d+)$/)?.[1]) || 0,
       ),
     );
+  listUI.addEventListener("pointerdown", () => { suppressClick = false; }, true);
+  listUI.addEventListener("click", e => {
+    if (!suppressClick || e.detail === 0) return;
+    suppressClick = false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
   const thumbWidth = () => {
     const cs = getComputedStyle(listUI);
     return listUI.clientWidth ? Math.max(80, listUI.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) : 146;
   };
-  function sizeOf(b) {
+  function measure(b, fn) {
     // Measure one board in the same layout as the single-page editor. Showing
     // every Flex sibling at once can shrink fixed-width slides to a thin strip.
     b.setAttribute('data-thumb-measure-target', '');
     root.setAttribute('data-thumb-measuring', '');
-    try { return withAll(() => {
+    try { return withAll(fn); } finally {
+      root.removeAttribute('data-thumb-measuring');
+      b.removeAttribute('data-thumb-measure-target');
+    }
+  }
+  function sizeOf(b) {
+    return measure(b, () => {
       if (visible(b)) {
         const v = {
           w: b.offsetWidth || 1280,
@@ -53,10 +68,7 @@ export function createPages({
         return v;
       }
       return sizes.get(b) || { ...lastSize, display: "block" };
-    }); } finally {
-      root.removeAttribute('data-thumb-measuring');
-      b.removeAttribute('data-thumb-measure-target');
-    }
+    });
   }
   const fixCSS = ({ w, h, display }) =>
     `html,body{margin:0!important;padding:0!important;overflow:hidden!important;width:${w}px!important;height:${h}px!important;min-height:0!important}[data-thumb-chain]{display:block!important;position:static!important;transform:none!important;translate:none!important;scale:none!important;margin:0!important;padding:0!important;border:0!important;width:${w}px!important;height:${h}px!important;min-height:0!important;overflow:hidden!important}[data-thumb-target]{display:${display}!important;position:relative!important;inset:auto!important;margin:0!important;transform:none!important;translate:none!important;scale:none!important;opacity:1!important;visibility:visible!important;flex:none!important;width:${w}px!important;height:${h}px!important;box-sizing:border-box!important}*,*::before,*::after{animation:none!important;transition:none!important}`;
@@ -170,10 +182,6 @@ export function createPages({
           }
         };
         t.querySelector(".thumb-main").onclick = () => {
-          if (suppressClick) {
-            suppressClick = false;
-            return;
-          }
           closeMenus();
           select(null);
           goTo(b);
@@ -266,7 +274,7 @@ export function createPages({
   function target() {
     return menuBoard?.isConnected ? menuBoard : S.current;
   }
-  function add(ref) {
+  function add(ref, focus = false) {
     const
       sz = ref ? sizeOf(ref) : lastSize,
       b = document.createElement("section");
@@ -290,6 +298,7 @@ export function createPages({
       b,
     );
     menuBoard = null;
+    if (focus) thumbs.get(b)?.querySelector(".thumb-main").focus({ preventScroll: true });
   }
   function copy(b) {
     if (!b) return;
@@ -453,25 +462,40 @@ export function createPages({
   function startReorder(e, b) {
     if (e.button !== 0 || !writable() || e.detail > 1) return;
     menuBoard = null;
+    const handle = e.currentTarget;
+    const source = thumbs.get(b);
     const x = e.clientX,
       y = e.clientY;
     let moved = false,
       before = null,
       lastY = y,
       raf;
-    const clear = () =>
-      thumbs.forEach((t) => t.classList.remove("drop-before", "drop-after"));
+    let marker = null, markerClass = "";
+    function clearMarker() {
+      marker?.classList.remove(markerClass);
+      marker = null;
+    }
+    function finish() {
+      cancelAnimationFrame(raf);
+      clearMarker();
+      source?.classList.remove("dragging");
+      listUI.classList.remove("reordering");
+    }
     function indicator() {
-      clear();
       const others = boards().filter((n) => n !== b);
       before =
         others.find((n) => {
           const r = thumbs.get(n).getBoundingClientRect();
           return lastY < r.top + r.height / 2;
         }) || null;
-      if (before) thumbs.get(before).classList.add("drop-before");
-      else if (others.length)
-        thumbs.get(others.at(-1)).classList.add("drop-after");
+      const next = thumbs.get(before || others.at(-1));
+      const nextClass = before ? "drop-before" : "drop-after";
+      if (marker === next && markerClass === nextClass) return;
+      clearMarker();
+      if (!next) return;
+      marker = next;
+      markerClass = nextClass;
+      marker.classList.add(markerClass);
     }
     function scroll() {
       if (!moved) return;
@@ -490,38 +514,99 @@ export function createPages({
         if (!moved && Math.hypot(ev.clientX - x, ev.clientY - y) < 6) return;
         if (!moved) {
           moved = true;
-          thumbs.get(b).classList.add("dragging");
+          suppressClick = true;
+          source?.classList.add("dragging");
+          listUI.classList.add("reordering");
+          try { handle.setPointerCapture(e.pointerId); } catch {}
           scroll();
         }
         indicator();
       },
       up(ev) {
-        cancelAnimationFrame(raf);
-        clear();
-        thumbs.get(b)?.classList.remove("dragging");
-        if (moved) {
-          suppressClick = true;
-          setTimeout(() => {
-            suppressClick = false;
-          }, 0);
-          if (ev?.type !== "pointercancel") {
-            // Finish the gesture before admission can pause it; the DOM stays untouched until lease grant.
-            S.drag = null;
-            execute([b, before], move).catch(() => {});
-          }
+        finish();
+        if (moved && ev?.type !== "pointercancel") {
+          // Finish the gesture before admission can pause it; the DOM stays untouched until lease grant.
+          S.drag = null;
+          execute([b, before], move).catch(() => {});
         }
       },
-      cancel() {
-        cancelAnimationFrame(raf);
-        moved = false;
-        clear();
-        thumbs.get(b)?.classList.remove("dragging");
-      },
+      cancel: finish,
     };
   }
+  const focusedPage = () => {
+    const id = ui.activeElement?.closest('.thumb-main')?.closest('.thumb')?.dataset.pageId;
+    return id && boards().find(b => b.dataset.artboard === id);
+  };
+  function copyEvent(e) {
+    const b = focusedPage();
+    if (!b || S.playing || !e.clipboardData) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    try {
+      e.clipboardData.setData(PAGE_CLIPBOARD_TYPE, measure(b, () => capturePage(b)));
+      e.clipboardData.setData('text/plain', b.dataset.title || b.dataset.artboard);
+      toast('已复制页面 · 可粘贴到其他文档');
+    } catch (error) {
+      e.clipboardData.setData(PAGE_CLIPBOARD_TYPE, '{"version":1,"failed":true}');
+      toast(error.message, 4500);
+    }
+    return true;
+  }
+  function pasteEvent(e) {
+    const ref = focusedPage();
+    const data = ref && e.clipboardData?.getData(PAGE_CLIPBOARD_TYPE);
+    // Object packets still work when the destination thumbnail has focus.
+    if (!data) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    if (!writable()) {
+      toast('当前暂不可操作，请等待同步或 AI 修改结束');
+      return true;
+    }
+    let imported;
+    try {
+      imported = readPage(data);
+    } catch (error) {
+      toast(error instanceof SyntaxError ? '剪贴板页面格式不受支持' : error.message, 4500);
+      return true;
+    }
+    execute([ref], target => {
+      const {page, layout} = imported;
+      const previousSequence = stage.getAttribute('data-page-seq');
+      const domIds = [page, ...page.querySelectorAll('[id]')].map(node => node.id).filter(Boolean);
+      let id;
+      do { id = allocatePage(); } while (domIds.some(old => document.getElementById(`${id}-${old}`)));
+      page.dataset.artboard = id;
+      const used = new Set([...stage.querySelectorAll('[data-el]')].map(el => el.dataset.el));
+      let n = 0;
+      for (const el of page.querySelectorAll('[data-el]')) {
+        let key;
+        do { key = `${id}-element-${++n}`; } while (used.has(key));
+        el.dataset.el = key;
+      }
+      rekeyDOMIds(page, id);
+      let verified = false;
+      transaction(() => {
+        target.after(page);
+        if (verified) return;
+        try {
+          measure(page, () => verifyPage(page, layout));
+          verified = true;
+        } catch (error) {
+          page.remove();
+          if (previousSequence === null) stage.removeAttribute('data-page-seq');
+          else stage.setAttribute('data-page-seq', previousSequence);
+          throw error;
+        }
+      }, () => page.remove(), page);
+      thumbs.get(page)?.querySelector('.thumb-main').focus({ preventScroll: true });
+    }).then(() => toast('已粘贴页面 · 可撤销')).catch(() => {});
+    return true;
+  }
   function key(e) {
-    const active = ui.activeElement?.closest(".thumb");
-    if (!active || ui.activeElement.matches("input")) return false;
+    const focused = ui.activeElement;
+    const active = focused?.closest(".thumb");
+    if (!active || focused.matches("input")) return false;
     const b = boards().find(
         (b) => b.dataset.artboard === active.dataset.pageId,
       ),
@@ -547,7 +632,9 @@ export function createPages({
       select(null);
       goTo(next);
       thumbs.get(next)?.querySelector(".thumb-main").focus();
-    } else if (e.key === "Enter" || e.key === " ") {
+    } else if (e.key === "Enter" && focused.matches(".thumb-main") && !mod && !e.altKey && !e.shiftKey) {
+      if (!e.repeat) action(ref => add(ref, true), b);
+    } else if (e.key === " " && focused.matches(".thumb-main")) {
       select(null);
       goTo(b);
     } else return false;
@@ -566,6 +653,7 @@ export function createPages({
     moveStep,
     rename,
     key,
+    copyEvent, pasteEvent,
     openSize, sizeKey,
     hasPendingDraft: () => !!renameDraft || !!sizeDraft,
     clearTarget() {
