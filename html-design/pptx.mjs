@@ -187,26 +187,30 @@ export function collectEditableSlide(board) {
       const heads = el.dataset.shapeHeads || (kind === 'line' ? 'none' : 'end');
       const head = el.dataset.shapeHead || 'open';
       const hasHead = heads !== 'none' && head !== 'none';
-      if (connector && el.dataset.shapeRoute !== 'elbow' && el.dataset.shapeShaft !== 'false') {
+      const nativeTip = head === 'open' && Number(el.dataset.shapeRepeat ?? 1) === 1;
+      let nativeLine;
+      if (connector && el.dataset.shapeRoute !== 'elbow' && el.dataset.shapeShaft !== 'false' && (!hasHead || nativeTip)) {
         const ink = el.querySelector('[data-shape-ink]') || el.lastElementChild || el;
         const stroke = getComputedStyle(ink), strokeWidth = parseFloat(stroke.strokeWidth);
         // Office sizes its line ends relative to the stroke and in preset
         // steps. Only use that approximation for the default arrow outline.
-        const defaultHead = head === 'open' && Number(el.dataset.shapeRepeat ?? 1) === 1 &&
-          Number(el.dataset.shapeHeadLength ?? 16) === 16 &&
+        const defaultHead = Number(el.dataset.shapeHeadLength ?? 16) === 16 &&
           Number(el.dataset.shapeHeadWidth ?? 18) === 18 &&
           Number(el.dataset.shapeArrowScale ?? 1) === 1 && strokeWidth === 4;
-        const matrix = !hasHead || defaultHead ? el.getScreenCTM() : null;
+        const matrix = el.getScreenCTM();
         if (matrix) {
           const [x1, y1, x2, y2] = endpoints;
           const a = new DOMPoint(x1, y1).matrixTransform(matrix);
           const b = new DOMPoint(x2, y2).matrixTransform(matrix);
           const width = strokeWidth * Math.hypot(matrix.a, matrix.b);
-          emit(el, {kind: 'line', points: [a.x - origin.left, a.y - origin.top, b.x - a.x, b.y - a.y],
+          nativeLine = {kind: 'line', points: [a.x - origin.left, a.y - origin.top, b.x - a.x, b.y - a.y],
             width, color: cssColor(stroke.stroke),
             beginArrowType: hasHead && heads === 'both' ? 'arrow' : undefined,
-            endArrowType: hasHead ? 'arrow' : undefined, nativeConnector: true, name});
-          continue;
+            endArrowType: hasHead ? 'arrow' : undefined, nativeConnector: true, name};
+          if (!hasHead || defaultHead) {
+            emit(el,nativeLine);
+            continue;
+          }
         }
       }
       // Endpoint arrows saved before the shared DSL have the same ink path,
@@ -221,6 +225,11 @@ export function collectEditableSlide(board) {
           paths.forEach(path => emit(el,{...box,...path,kind:'arrowPath',name}));
           continue;
         }
+      }
+      if (nativeLine) {
+        warnings.push(`${name}: 自定义箭头几何无法稳定导出，头部使用原生预设尺寸`);
+        emit(el,nativeLine);
+        continue;
       }
       const native = { rect: 'roundRect', ellipse: 'ellipse', triangle: 'triangle', diamond: 'diamond', star: 'star5', line: 'line', arrow: 'line', blockArrow: 'rightArrow' }[kind];
       const view = el.viewBox.baseVal;

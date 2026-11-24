@@ -679,6 +679,8 @@ test('PPTX retains exact custom arrowhead dimensions while default and plain lin
     make('wide-head','arrowDouble',230,{headWidth:62}),
     make('heavy-stroke','arrow',300,{strokeWidth:8}),
     make('older-arrow','arrow',350,{headLength:30,headWidth:22}).replace(' data-shape-arrow="1"',''),
+    make('mirrored-arrow','arrow',400,{headLength:35,end:{x:400,y:310}})
+      .replace('style="position:absolute','style="transform:scaleX(-1);position:absolute'),
   ].join(''));
   const response=await fetch(`${origin}/__html-design/export/pptx`,{
     method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:JSON.stringify({html,title:'Arrowhead dimensions'}),
@@ -691,6 +693,11 @@ test('PPTX retains exact custom arrowhead dimensions while default and plain lin
   assert.doesNotMatch(shapes['plain-line'],/headEnd|tailEnd/);
   assert.match(shapes['default-arrow'],/<a:headEnd type="arrow"/);
   assert.match(shapes['default-arrow'],/<a:tailEnd type="arrow"/);
+  assert.match(shapes['mirrored-arrow'],/prst="line"/);
+  assert.match(shapes['mirrored-arrow'],/<a:xfrm[^>]*flipH="1"[^>]*flipV="1"/);
+  assert.match(shapes['mirrored-arrow'],/<a:off x="952500" y="2952750"/);
+  assert.match(shapes['mirrored-arrow'],/<a:ext cx="2857500" cy="857250"/);
+  assert.match(shapes['mirrored-arrow'],/<a:tailEnd type="arrow"/);
   for (const [id,length,height,headCount] of [
     ['long-head',38,18,1],['wide-head',16,62,2],['heavy-stroke',16,18,1],['older-arrow',30,22,1],
   ]) {
