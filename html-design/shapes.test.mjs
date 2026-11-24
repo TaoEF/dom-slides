@@ -666,3 +666,43 @@ test('a paint-only edit preserves the centering of a legacy widened arrowhead', 
     assert.equal(await ink.getAttribute('d'),'M57 0L143 48L57 96Z');
   } finally { await p.close(); }
 });
+
+
+test('PPTX retains exact custom arrowhead dimensions while default and plain lines stay native', async () => {
+  const make = (id, kind, y, params = {}) => connectorMarkup({
+    id, kind, start:{x:100,y},end:{x:400,y},...params,
+  });
+  const html=shell([
+    make('plain-line','line',50,{strokeWidth:7}),
+    make('default-arrow','arrowDouble',100),
+    make('long-head','arrow',150,{headLength:38}),
+    make('wide-head','arrowDouble',230,{headWidth:62}),
+    make('heavy-stroke','arrow',300,{strokeWidth:8}),
+    make('older-arrow','arrow',350,{headLength:30,headWidth:22}).replace(' data-shape-arrow="1"',''),
+  ].join(''));
+  const response=await fetch(`${origin}/__html-design/export/pptx`,{
+    method:'POST',headers:{'Content-Type':'application/json',Origin:origin},body:JSON.stringify({html,title:'Arrowhead dimensions'}),
+  });
+  assert.equal(response.status,200);
+  const zip=await JSZip.loadAsync(await response.arrayBuffer());
+  const xml=await zip.file('ppt/slides/slide1.xml').async('string');
+  const shapes=Object.fromEntries([...xml.matchAll(/<p:sp[ >][\s\S]*?<\/p:sp>/g)].map(([shape])=>[shape.match(/<p:cNvPr[^>]* name="([^"]+)"/)?.[1],shape]));
+  assert.match(shapes['plain-line'],/prst="line"/);
+  assert.doesNotMatch(shapes['plain-line'],/headEnd|tailEnd/);
+  assert.match(shapes['default-arrow'],/<a:headEnd type="arrow"/);
+  assert.match(shapes['default-arrow'],/<a:tailEnd type="arrow"/);
+  for (const [id,length,height,headCount] of [
+    ['long-head',38,18,1],['wide-head',16,62,2],['heavy-stroke',16,18,1],['older-arrow',30,22,1],
+  ]) {
+    const shape=shapes[id];
+    assert.match(shape,/<a:custGeom>/,id);
+    assert.doesNotMatch(shape,/headEnd|tailEnd/,id);
+    const moves=[...shape.matchAll(/<a:moveTo>\s*<a:pt x="(-?\d+)" y="(-?\d+)"\s*\/>\s*<\/a:moveTo>\s*<a:lnTo>\s*<a:pt x="(-?\d+)" y="(-?\d+)"\s*\/>\s*<\/a:lnTo>/g)].slice(1);
+    assert.equal(moves.length,headCount,id);
+    for (const [,x,y,tipX,tipY] of moves) {
+      assert.equal(Math.abs(Number(tipX)-Number(x)),length*9525,id);
+      assert.equal(Math.abs(Number(tipY)-Number(y)),height/2*9525,id);
+    }
+  }
+  assert.doesNotMatch(xml,/<p:pic>/);
+});

@@ -182,27 +182,36 @@ export function collectEditableSlide(board) {
     } else if (el.matches('svg[data-shape]')) {
       const kind = el.dataset.shape;
       const endpoints = el.dataset.shapeEndpoints?.trim().split(/\s+/).map(Number);
+      const connector = ['line','arrow','arrowDouble','arrowElbow'].includes(kind) &&
+        endpoints?.length === 4 && endpoints.every(Number.isFinite);
       const heads = el.dataset.shapeHeads || (kind === 'line' ? 'none' : 'end');
       const head = el.dataset.shapeHead || 'open';
-      const straight = el.dataset.shapeRoute !== 'elbow' && el.dataset.shapeShaft !== 'false' &&
-        (heads === 'none' || head === 'none' || head === 'open' && Number(el.dataset.shapeRepeat || 1) === 1);
-      if (straight && ['line','arrow','arrowDouble','arrowElbow'].includes(kind) && endpoints?.length === 4 && endpoints.every(Number.isFinite)) {
-        const matrix = el.getScreenCTM();
+      const hasHead = heads !== 'none' && head !== 'none';
+      if (connector && el.dataset.shapeRoute !== 'elbow' && el.dataset.shapeShaft !== 'false') {
+        const ink = el.querySelector('[data-shape-ink]') || el.lastElementChild || el;
+        const stroke = getComputedStyle(ink), strokeWidth = parseFloat(stroke.strokeWidth);
+        // Office sizes its line ends relative to the stroke and in preset
+        // steps. Only use that approximation for the default arrow outline.
+        const defaultHead = head === 'open' && Number(el.dataset.shapeRepeat ?? 1) === 1 &&
+          Number(el.dataset.shapeHeadLength ?? 16) === 16 &&
+          Number(el.dataset.shapeHeadWidth ?? 18) === 18 &&
+          Number(el.dataset.shapeArrowScale ?? 1) === 1 && strokeWidth === 4;
+        const matrix = !hasHead || defaultHead ? el.getScreenCTM() : null;
         if (matrix) {
           const [x1, y1, x2, y2] = endpoints;
           const a = new DOMPoint(x1, y1).matrixTransform(matrix);
           const b = new DOMPoint(x2, y2).matrixTransform(matrix);
-          const ink = el.querySelector('[data-shape-ink]') || el.lastElementChild || el;
-          const stroke = getComputedStyle(ink);
-          const width = parseFloat(stroke.strokeWidth) * Math.hypot(matrix.a, matrix.b);
+          const width = strokeWidth * Math.hypot(matrix.a, matrix.b);
           emit(el, {kind: 'line', points: [a.x - origin.left, a.y - origin.top, b.x - a.x, b.y - a.y],
             width, color: cssColor(stroke.stroke),
-            beginArrowType: head === 'open' && heads === 'both' ? 'arrow' : undefined,
-            endArrowType: head === 'open' && heads !== 'none' ? 'arrow' : undefined, nativeConnector: true, name});
+            beginArrowType: hasHead && heads === 'both' ? 'arrow' : undefined,
+            endArrowType: hasHead ? 'arrow' : undefined, nativeConnector: true, name});
           continue;
         }
       }
-      if (el.dataset.shapeArrow === '1' && box.supported) {
+      // Endpoint arrows saved before the shared DSL have the same ink path,
+      // but do not carry the data-shape-arrow marker.
+      if ((el.dataset.shapeArrow === '1' || connector) && box.supported) {
         const paths = [...el.querySelectorAll('[data-shape-ink],[data-shape-head-ink]')].map(path => {
           const styles = getComputedStyle(path), points = arrowPath(path.getAttribute('d'),el.viewBox.baseVal,box);
           return points && {points, fill:cssColor(styles.fill), stroke:cssColor(styles.stroke),
