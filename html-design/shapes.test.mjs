@@ -6,7 +6,7 @@ import JSZip from 'jszip';
 import { browserOptions } from './export.mjs';
 import { createPreviewServer } from './server.mjs';
 import { shapeMarkup } from './src/shapes.js';
-import { arrowShapeKinds, arrowShapeMarkup, connectorKinds, connectorMarkup } from './src/line-arrow.js';
+import { arrowShapeKinds, arrowShapeMarkup, connectorKinds, connectorMarkup, arrowMarkup } from './src/line-arrow.js';
 import { collectEditableSlide } from './pptx.mjs';
 import { elementGeometry } from './src/geometry.js';
 
@@ -543,23 +543,97 @@ test('dragging an elbow endpoint recalculates its route and keeps the other endp
   } finally { await p.close(); }
 });
 
-test('stretching repeated heads writes the gap and permits shrinking in a second gesture', async () => {
+async function dragHandle(p,selector,dx,dy) {
+  const box=await p.locator(selector).boundingBox();
+  const from={x:box.x+box.width/2,y:box.y+box.height/2};
+  await drag(p,from,{x:from.x+dx,y:from.y+dy});
+}
+
+test('double chevron gap is a signed menu and DSL parameter independent of its corner handle', async () => {
   const p=await browser.newPage({viewport:{width:1440,height:900}});
   try {
-    await p.setContent(shell(arrowShapeMarkup({id:'heads',kind:'doubleChevron',gap:18})));
+    await p.setContent(shell(arrowMarkup({id:'heads',kind:'doubleChevron',headLength:50,gap:-8})));
     await p.addScriptTag({content:editor});
     await p.locator('[data-act=edit]').click();
     const heads=p.locator('[data-el=heads]');
     await heads.click();
-    const stretch=async delta => {
-      const b=await p.locator('[data-h=e]').boundingBox(), from={x:b.x+b.width/2,y:b.y+b.height/2};
-      await drag(p,from,{x:from.x+delta,y:from.y});
-    };
-    await stretch(100);
-    assert.ok(Number(await heads.getAttribute('data-shape-gap'))>18);
-    await stretch(-170);
-    assert.equal(await heads.getAttribute('data-shape-gap'),'0');
+    assert.equal(await p.locator('[data-h=e]').isVisible(),false);
+    assert.equal(await heads.evaluate(n=>n.offsetWidth || parseFloat(n.style.width)),92);
+    await dragHandle(p,'[data-h=se]',30,30);
+    assert.equal(await heads.getAttribute('data-shape-gap'),'-8');
+    await heads.click({button:'right'});
+    const gap=p.locator('[data-arrow-param=gap]');
+    const before = await heads.evaluate(n=>parseFloat(n.style.width));
+    await gap.fill('-20');
+    await gap.dispatchEvent('change');
+    assert.equal(await heads.getAttribute('data-shape-gap'),'-20');
+    assert.ok(Math.abs(await heads.evaluate(n=>parseFloat(n.style.width))-before+12)<.01);
+    await p.keyboard.press('Escape');
     await p.locator('[data-act=undo]').click();
-    assert.ok(Number(await heads.getAttribute('data-shape-gap'))>18);
+    assert.equal(await heads.getAttribute('data-shape-gap'),'-8');
+  } finally { await p.close(); }
+});
+
+test('the elbow middle handle edits bend DSL and preserves both endpoints', async () => {
+  const p=await browser.newPage({viewport:{width:1440,height:900}});
+  const start={x:120,y:300},end={x:560,y:100};
+  try {
+    await p.setContent(shell(arrowMarkup({id:'elbow',kind:'arrowElbow',start,end,bend:.6,bendAxis:'vertical',radius:18})));
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    const arrow=p.locator('[data-el=elbow]');
+    const ink = arrow.locator('[data-shape-ink]');
+    await ink.dispatchEvent('pointerdown',{button:0,bubbles:true,pointerId:1});
+    await ink.dispatchEvent('pointerup',{button:0,bubbles:true,pointerId:1});
+    const endpoints = await arrow.getAttribute('data-shape-endpoints');
+    const d = await ink.getAttribute('d');
+    await dragHandle(p,'[data-arrow-bend]',-65,0);
+    assert.equal(await arrow.getAttribute('data-shape-endpoints'),endpoints);
+    assert.ok(Number(await arrow.getAttribute('data-shape-bend'))<.6);
+    assert.equal(await arrow.getAttribute('data-shape-bend-axis'),'vertical');
+    assert.notEqual(await ink.getAttribute('d'),d);
+    const hit=await arrow.evaluate(n=>{
+      const [x,y]=n.dataset.shapeEndpoints.split(' ').map(Number);
+      return new DOMPoint(x+20,y).matrixTransform(n.getScreenCTM()).toJSON();
+    });
+    await p.mouse.click(hit.x,hit.y,{button:'right'});
+    const field=p.locator('[data-arrow-param=bend]');
+    await field.fill('35');
+    assert.equal(await arrow.getAttribute('data-shape-bend'),'0.35');
+    await p.locator('[data-act=arrow-reset-bend]').click();
+    assert.equal(await arrow.getAttribute('data-shape-bend'),'0.5');
+    assert.equal(await arrow.getAttribute('data-shape-bend-axis'),'auto');
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await arrow.getAttribute('data-shape-bend'),'0.35');
+  } finally { await p.close(); }
+});
+
+test('shaft corner changes head dimensions at a fixed tip and triangle sides stretch width only', async () => {
+  const p=await browser.newPage({viewport:{width:1440,height:900}});
+  try {
+    const block = arrowMarkup({id:'block',kind:'blockArrow',width:250,headLength:60,headWidth:82,strokeWidth:3,shaftWidth:35});
+    const triangle = arrowMarkup({id:'triangle',kind:'triangleHead',headLength:75,headWidth:90});
+    await p.setContent(shell(block+triangle));
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    const shaft=p.locator('[data-el=block]');
+    await shaft.click();
+    const tip=()=>shaft.evaluate(n=>{
+      const {width,height}=n.viewBox.baseVal;
+      return new DOMPoint(width-Number(n.dataset.shapeWidth)/2,height/2).matrixTransform(n.getScreenCTM()).toJSON();
+    });
+    const before=await tip();
+    await dragHandle(p,'[data-h=se]',24,35);
+    const after=await tip();
+    assert.ok(Math.hypot(before.x-after.x,before.y-after.y)<1);
+    const shape=await shaft.evaluate(n=>({width:parseFloat(n.style.width),headLength:Number(n.dataset.shapeHeadLength),headWidth:Number(n.dataset.shapeHeadWidth),strokeWidth:Number(n.dataset.shapeWidth)}));
+    assert.equal(shape.width,250);
+    assert.equal(shape.strokeWidth,3);
+    assert.ok(shape.headLength>60 && shape.headWidth>82);
+    const head=p.locator('[data-el=triangle]');
+    await head.click();
+    await dragHandle(p,'[data-h=e]',50,0);
+    assert.equal(await head.getAttribute('data-shape-head-width'),'90');
+    assert.ok(Number(await head.getAttribute('data-shape-head-length'))>75);
   } finally { await p.close(); }
 });

@@ -23,43 +23,70 @@ const presets = {
 };
 export const arrowLabel = kind => presets[kind]?.label;
 const defaults = { route: 'straight', heads: 'end', head: 'open', shaft: true, strokeWidth: 4,
-  shaftWidth: 22, headLength: 16, headWidth: 18, radius: 0, repeat: 1, gap: 6, scale: 1 };
+  shaftWidth: 22, headLength: 16, headWidth: 18, radius: 0, repeat: 1, gap: 6, scale: 1, bend: .5, bendAxis: 'auto' };
 const fields = {
+  bend: 'shapeBend', bendAxis: 'shapeBendAxis',
   route: 'shapeRoute', heads: 'shapeHeads', head: 'shapeHead', shaft: 'shapeShaft',
   strokeWidth: 'shapeWidth', shaftWidth: 'shapeShaftWidth', headLength: 'shapeHeadLength',
   headWidth: 'shapeHeadWidth', radius: 'shapeRadius', repeat: 'shapeRepeat', gap: 'shapeGap',
   scale: 'shapeArrowScale', fill: 'shapeFill', stroke: 'shapeStroke',
 };
 const valid = (v, values, fallback) => values.includes(v) ? v : fallback;
+const numericFields = {
+  strokeWidth: [0,16,1,'线宽'], shaftWidth: [1,400,1,'箭身粗细'],
+  headLength: [4,400,1,'头部长度'], headWidth: [4,400,1,'头部高度'],
+  radius: [0,50,1,'圆角'], gap: [-5000,5000,1,'间距'],
+  bend: [.05,.95,.01,'中段位置'], scale: [.01,40,.01], repeat: [1,2,1],
+};
 function model(kind, options = {}) {
-  const p = { ...defaults, ...presets[kind] };
-  return {
-    route: valid(options.route, ['straight', 'elbow'], p.route),
-    heads: valid(options.heads, ['none', 'end', 'both'], p.heads),
-    head: valid(options.head, ['none', 'open', 'triangle', 'notched', 'ribbon'], p.head),
-    shaft: options.shaft == null ? p.shaft : options.shaft === true || options.shaft === 'true',
-    strokeWidth: param(options.strokeWidth, p.strokeWidth, 0, 16),
-    shaftWidth: param(options.shaftWidth, p.shaftWidth, 1, 400),
-    headLength: param(options.headLength, p.headLength, 4, 400),
-    headWidth: param(options.headWidth, p.headWidth, 4, 400),
-    radius: param(options.radius, p.radius, 0, 50),
-    repeat: Math.round(param(options.repeat, p.repeat, 1, 2)),
-    gap: param(options.gap, p.gap, 0, 5000),
-    scale: param(options.scale, p.scale, .01, 40),
+  const defaultsForKind = { ...defaults, ...presets[kind] };
+  const p = {
+    route: valid(options.route, ['straight', 'elbow'], defaultsForKind.route),
+    bendAxis: valid(options.bendAxis, ['auto', 'horizontal', 'vertical'], defaultsForKind.bendAxis),
+    heads: valid(options.heads, ['none', 'end', 'both'], defaultsForKind.heads),
+    head: valid(options.head, ['none', 'open', 'triangle', 'notched', 'ribbon'], defaultsForKind.head),
+    shaft: options.shaft == null ? defaultsForKind.shaft : options.shaft === true || options.shaft === 'true',
     fill: color(options.fill), stroke: color(options.stroke),
   };
+  for (const [name, [min,max]] of Object.entries(numericFields)) {
+    p[name] = param(options[name],defaultsForKind[name],min,max);
+  }
+  p.repeat = Math.round(p.repeat);
+  p.gap = number(Math.max(p.gap, -p.headLength * p.scale + 1));
+  return p;
 }
 
-const readModel = el => model(el.dataset.shape, Object.fromEntries(
+export const readArrowParameters = el => model(el.dataset.shape, Object.fromEntries(
   Object.entries(fields).map(([key, name]) => [key, el.dataset[name]])));
 export const isArrowShape = el => el?.matches('svg[data-shape-arrow="1"]:not([data-shape-endpoints])');
-export const arrowHasFill = el => !['open', 'none'].includes(readModel(el).head);
+export const arrowHasFill = el => !['open', 'none'].includes(readArrowParameters(el).head);
 export function arrowResizeMode(el) {
   if (!isArrowShape(el)) return null;
-  const p = readModel(el);
-  return p.shaft || p.repeat > 1 ? 'length' : 'uniform';
+  const p = readArrowParameters(el);
+  if (p.shaft) return 'shaft';
+  if (p.repeat > 1) return 'uniform';
+  return ['triangle','notched'].includes(p.head) ? 'width' : 'uniform';
 }
-export const arrowScale = el => readModel(el).scale;
+const setFields = (el,p) => {
+  for (const [key,name] of Object.entries(fields)) el.dataset[name] = String(p[key]);
+};
+
+export function arrowMenuParameters(el) {
+  if (!isArrowShape(el) && !readLineArrow(el)) return [];
+  const p = readArrowParameters(el), names = ['strokeWidth'];
+  if (p.head !== 'none') names.push('headLength','headWidth');
+  if ((p.shaft && p.head === 'triangle' && isArrowShape(el)) || p.head === 'ribbon') names.push('shaftWidth');
+  if (p.route === 'elbow' || isArrowShape(el)) names.push('radius');
+  if (p.repeat > 1) names.push('gap');
+  if (p.route === 'elbow') names.push('bend');
+  return names.map(name => {
+    const [min,max,step,label] = numericFields[name];
+    const factor = name === 'bend' ? 100 : 1;
+    return {name,label: name === 'bend' ? label + ' (%)' : label,
+      min: name === 'gap' ? Math.max(min, Math.ceil(-p.headLength*p.scale+1)) : min*factor,
+      max:max*factor, step:step*factor, value:number(p[name]*factor)};
+  });
+}
 
 export function readLineArrow(el) {
   if (!el?.matches('svg[data-shape-endpoints]') || !connectorKinds.includes(el.dataset.shape)) return null;
@@ -87,19 +114,28 @@ function path(points, radius = 0, closed = false) {
   return d + (closed ? 'Z' : '');
 }
 
-function routedPoints(start, end, route) {
+function routedPoints(start, end, p) {
   const {x, y} = start, {x: ex, y: ey} = end;
   const points = [[x, y]];
-  if (route === 'elbow' && Math.abs(ex - x) >= 1 && Math.abs(ey - y) >= 1) {
-    if (Math.abs(ex - x) >= Math.abs(ey - y)) {
-      const mid = (x + ex) / 2;
+  if (p.route === 'elbow' && Math.abs(ex - x) >= 1 && Math.abs(ey - y) >= 1) {
+    const vertical = p.bendAxis === 'vertical' ||
+      p.bendAxis === 'auto' && Math.abs(ex - x) >= Math.abs(ey - y);
+    if (vertical) {
+      const mid = x + (ex - x)*p.bend;
       points.push([mid, y], [mid, ey]);
     } else {
-      const mid = (y + ey) / 2;
+      const mid = y + (ey - y)*p.bend;
       points.push([x, mid], [ex, mid]);
     }
   }
   return [...points, [ex, ey]];
+}
+export function arrowBendHandle(el, points) {
+  if (!points) return null;
+  const route = routedPoints(...points, readArrowParameters(el));
+  if (route.length !== 4) return null;
+  const [,a,b] = route;
+  return {x:(a[0]+b[0])/2, y:(a[1]+b[1])/2, axis:a[0] === b[0] ? 'x' : 'y'};
 }
 function headPath(type, map, half, length, thickness, radius) {
   const points = {
@@ -117,7 +153,7 @@ function pathMarkup(d, p, filled, primary = false) {
 }
 function geometry(p, start, end, connector) {
   if (connector) p = {...p, round:true, strokeWidth:Math.max(1,p.strokeWidth)};
-  const points = routedPoints(start, end, connector ? p.route : 'straight');
+  const points = routedPoints(start, end, connector ? p : {...p,route:'straight'});
   const shaft = p.shaft ? path(points, connector ? p.radius : 0) : '';
   const reach = p.headLength * p.scale, half = p.headWidth * p.scale / 2;
   const filled = p.head !== 'open' && p.head !== 'none';
@@ -156,42 +192,60 @@ const view = (w,h) => `0 0 ${w} ${h}`;
 const startView = (kind,id,p,w,h) =>
   `<svg data-el="${attr(id)}" data-shape="${kind}" data-shape-arrow="1" aria-label="${arrowLabel(kind)}" ${datasetAttrs(p)} viewBox="${view(w,h)}" preserveAspectRatio="none"`;
 
-function sizing(p) {
-  return { head: p.headLength * p.scale, pad: p.strokeWidth * p.scale / 2,
-    natural: p.headLength * p.scale * p.repeat + p.gap * (p.repeat - 1) + p.strokeWidth * p.scale };
-}
-const repeatsWithoutShaft = p => !p.shaft && p.repeat === 2;
-function minimumArrowWidth(p) {
-  return sizing(p).natural - (repeatsWithoutShaft(p) ? p.gap : 0);
-}
-function shapeWithWidth(p, width) {
-  if (repeatsWithoutShaft(p)) p.gap = number(Math.max(0, width - minimumArrowWidth(p)));
-  return p;
+function shapeBox(p, width) {
+  const pad = p.strokeWidth*p.scale/2;
+  const natural = p.headLength*p.scale*p.repeat + p.gap*(p.repeat-1) + 2*pad;
+  return {
+    w:number(p.shaft ? Math.max(natural+4, width ?? natural+4) : natural),
+    h:number((p.headWidth+p.strokeWidth)*p.scale),
+  };
 }
 function shapeGeometry(p,w,h) {
-  const {pad,natural} = sizing(p);
-  const y = h / 2, to = !p.shaft && p.repeat === 1 ? (w + natural)/2 - pad : w - pad;
-  return geometry({...p,strokeWidth:p.strokeWidth*p.scale}, {x:pad,y}, {x:to,y}, false);
+  const pad = p.strokeWidth*p.scale/2;
+  return geometry({...p,strokeWidth:p.strokeWidth*p.scale}, {x:pad,y:h/2}, {x:w-pad,y:h/2}, false);
 }
 export function arrowShapeMarkup({id,kind,...options}) {
   if (!id || !arrowShapeKinds.includes(kind)) throw new Error('arrowShapeMarkup requires an id and arrow shape kind');
-  const p = model(kind, options), {natural} = sizing(p);
-  const w = param(options.width, presets[kind].width ?? natural, minimumArrowWidth(p), 5000);
-  shapeWithWidth(p,w);
-  const h = p.headWidth*p.scale + p.strokeWidth*p.scale;
+  const p = model(kind, options);
+  const {w,h} = shapeBox(p,param(options.width,presets[kind].width ?? 0,0,5000));
   return `${startView(kind,id,p,w,h)} style="width:${w}px;height:${h}px;display:block;overflow:visible">${shapeGeometry(p,w,h)}</svg>`;
 }
 export function renderArrowShape(el,w,h) {
-  const p = shapeWithWidth(readModel(el),w);
+  const p = readArrowParameters(el);
   el.setAttribute('viewBox',view(w,h));
-  if (repeatsWithoutShaft(p)) el.dataset.shapeGap = String(p.gap);
   el.innerHTML=shapeGeometry(p,w,h);
 }
-export function resizeArrowShape(el,w,h,initial,mode,scale) {
-  if (mode === 'length') return {w:Math.max(minimumArrowWidth(readModel(el)),w),h:initial.h};
-  const k = Math.max(.1,w === initial.w ? h/initial.h : w/initial.w,8/initial.w,8/initial.h);
-  el.dataset.shapeArrowScale = String(k*scale);
-  return {w:initial.w*k,h:initial.h*k};
+export function setArrowParameters(el, changes, width = parseFloat(el.style.width)) {
+  const p = model(el.dataset.shape, {...readArrowParameters(el),...changes});
+  setFields(el,p);
+  const points = readLineArrow(el);
+  if (points) {
+    el.dataset.shapeArrow = '1';
+    renderLineArrow(el,points);
+    return;
+  }
+  const {w,h} = shapeBox(p, Number.isFinite(width) ? width : undefined);
+  el.style.width = `${w}px`;
+  el.style.height = `${h}px`;
+  renderArrowShape(el,w,h);
+  return {w,h};
+}
+export function resizeArrowShape(el,w,h,initial,mode,dir,p) {
+  if (mode === 'shaft') {
+    if (dir !== 'se') return setArrowParameters(el,p,w);
+    const length = p.headLength*p.scale, height = p.headWidth*p.scale;
+    const k = 1 + ((w-initial.w)*length + (h-initial.h)*height)/(length*length+height*height);
+    const maxLength = (initial.w-4)/p.scale - p.strokeWidth;
+    const factor = Math.min(Math.max(4/p.headLength,4/p.headWidth,k),
+      maxLength/p.headLength,400/p.headLength,400/p.headWidth);
+    return setArrowParameters(el,{...p,headLength:number(p.headLength*factor),headWidth:number(p.headWidth*factor)},initial.w);
+  }
+  if (mode === 'width' && (dir === 'e' || dir === 'w'))
+    return setArrowParameters(el,{...p,headLength:number(w/p.scale-p.strokeWidth)});
+  const k = Math.max(.1,w === initial.w ? h/initial.h : w/initial.w);
+  const minScale = p.repeat > 1 && p.gap < 0 ? (1-p.gap)/p.headLength : 0;
+  const scale = Math.max(k*p.scale, Math.ceil(minScale*1000)/1000);
+  return setArrowParameters(el,{...p,scale:number(scale)});
 }
 
 function connectorBox(start,end) {
@@ -212,7 +266,7 @@ export function makeLineArrow(kind = 'arrow') {
   const el = document.createElementNS(NS, 'svg'), p = model(kind);
   el.dataset.shape = kind;
   el.dataset.shapeArrow = '1';
-  for (const [key,name] of Object.entries(fields)) el.dataset[name]=String(p[key]);
+  setFields(el,p);
   el.setAttribute('aria-label', arrowLabel(kind));
   el.setAttribute('preserveAspectRatio','none');
   Object.assign(el.style,{position:'absolute',display:'block',overflow:'visible',
@@ -228,5 +282,11 @@ export function setLineArrow(el,start,end) {
   return {x,y};
 }
 export function renderLineArrow(el,[start,end]) {
-  el.innerHTML=geometry(readModel(el),start,end,true);
+  el.innerHTML=geometry(readArrowParameters(el),start,end,true);
+}
+
+// One generation entry for the arrow DSL. Existing mode-specific helpers
+// remain available to earlier Agent documents.
+export function arrowMarkup(spec) {
+  return connectorKinds.includes(spec.kind) ? connectorMarkup(spec) : arrowShapeMarkup(spec);
 }

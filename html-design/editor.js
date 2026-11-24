@@ -310,9 +310,13 @@ property of their respective owners.
     radius: 0,
     repeat: 1,
     gap: 6,
-    scale: 1
+    scale: 1,
+    bend: 0.5,
+    bendAxis: "auto"
   };
   var fields = {
+    bend: "shapeBend",
+    bendAxis: "shapeBendAxis",
     route: "shapeRoute",
     heads: "shapeHeads",
     head: "shapeHead",
@@ -329,36 +333,71 @@ property of their respective owners.
     stroke: "shapeStroke"
   };
   var valid = (v, values, fallback) => values.includes(v) ? v : fallback;
+  var numericFields = {
+    strokeWidth: [0, 16, 1, "线宽"],
+    shaftWidth: [1, 400, 1, "箭身粗细"],
+    headLength: [4, 400, 1, "头部长度"],
+    headWidth: [4, 400, 1, "头部高度"],
+    radius: [0, 50, 1, "圆角"],
+    gap: [-5e3, 5e3, 1, "间距"],
+    bend: [0.05, 0.95, 0.01, "中段位置"],
+    scale: [0.01, 40, 0.01],
+    repeat: [1, 2, 1]
+  };
   function model(kind, options = {}) {
-    const p = { ...defaults, ...presets[kind] };
-    return {
-      route: valid(options.route, ["straight", "elbow"], p.route),
-      heads: valid(options.heads, ["none", "end", "both"], p.heads),
-      head: valid(options.head, ["none", "open", "triangle", "notched", "ribbon"], p.head),
-      shaft: options.shaft == null ? p.shaft : options.shaft === true || options.shaft === "true",
-      strokeWidth: param(options.strokeWidth, p.strokeWidth, 0, 16),
-      shaftWidth: param(options.shaftWidth, p.shaftWidth, 1, 400),
-      headLength: param(options.headLength, p.headLength, 4, 400),
-      headWidth: param(options.headWidth, p.headWidth, 4, 400),
-      radius: param(options.radius, p.radius, 0, 50),
-      repeat: Math.round(param(options.repeat, p.repeat, 1, 2)),
-      gap: param(options.gap, p.gap, 0, 5e3),
-      scale: param(options.scale, p.scale, 0.01, 40),
+    const defaultsForKind = { ...defaults, ...presets[kind] };
+    const p = {
+      route: valid(options.route, ["straight", "elbow"], defaultsForKind.route),
+      bendAxis: valid(options.bendAxis, ["auto", "horizontal", "vertical"], defaultsForKind.bendAxis),
+      heads: valid(options.heads, ["none", "end", "both"], defaultsForKind.heads),
+      head: valid(options.head, ["none", "open", "triangle", "notched", "ribbon"], defaultsForKind.head),
+      shaft: options.shaft == null ? defaultsForKind.shaft : options.shaft === true || options.shaft === "true",
       fill: color(options.fill),
       stroke: color(options.stroke)
     };
+    for (const [name, [min, max]] of Object.entries(numericFields)) {
+      p[name] = param(options[name], defaultsForKind[name], min, max);
+    }
+    p.repeat = Math.round(p.repeat);
+    p.gap = number(Math.max(p.gap, -p.headLength * p.scale + 1));
+    return p;
   }
-  var readModel = (el) => model(el.dataset.shape, Object.fromEntries(
+  var readArrowParameters = (el) => model(el.dataset.shape, Object.fromEntries(
     Object.entries(fields).map(([key, name]) => [key, el.dataset[name]])
   ));
   var isArrowShape = (el) => el?.matches('svg[data-shape-arrow="1"]:not([data-shape-endpoints])');
-  var arrowHasFill = (el) => !["open", "none"].includes(readModel(el).head);
+  var arrowHasFill = (el) => !["open", "none"].includes(readArrowParameters(el).head);
   function arrowResizeMode(el) {
     if (!isArrowShape(el)) return null;
-    const p = readModel(el);
-    return p.shaft || p.repeat > 1 ? "length" : "uniform";
+    const p = readArrowParameters(el);
+    if (p.shaft) return "shaft";
+    if (p.repeat > 1) return "uniform";
+    return ["triangle", "notched"].includes(p.head) ? "width" : "uniform";
   }
-  var arrowScale = (el) => readModel(el).scale;
+  var setFields = (el, p) => {
+    for (const [key, name] of Object.entries(fields)) el.dataset[name] = String(p[key]);
+  };
+  function arrowMenuParameters(el) {
+    if (!isArrowShape(el) && !readLineArrow(el)) return [];
+    const p = readArrowParameters(el), names = ["strokeWidth"];
+    if (p.head !== "none") names.push("headLength", "headWidth");
+    if (p.shaft && p.head === "triangle" && isArrowShape(el) || p.head === "ribbon") names.push("shaftWidth");
+    if (p.route === "elbow" || isArrowShape(el)) names.push("radius");
+    if (p.repeat > 1) names.push("gap");
+    if (p.route === "elbow") names.push("bend");
+    return names.map((name) => {
+      const [min, max, step, label] = numericFields[name];
+      const factor = name === "bend" ? 100 : 1;
+      return {
+        name,
+        label: name === "bend" ? label + " (%)" : label,
+        min: name === "gap" ? Math.max(min, Math.ceil(-p.headLength * p.scale + 1)) : min * factor,
+        max: max * factor,
+        step: step * factor,
+        value: number(p[name] * factor)
+      };
+    });
+  }
   function readLineArrow(el) {
     if (!el?.matches("svg[data-shape-endpoints]") || !connectorKinds.includes(el.dataset.shape)) return null;
     const values = el.dataset.shapeEndpoints.trim().split(/\s+/).map(Number);
@@ -383,19 +422,27 @@ property of their respective owners.
     }
     return d + (closed ? "Z" : "");
   }
-  function routedPoints(start, end, route) {
+  function routedPoints(start, end, p) {
     const { x, y } = start, { x: ex, y: ey } = end;
     const points = [[x, y]];
-    if (route === "elbow" && Math.abs(ex - x) >= 1 && Math.abs(ey - y) >= 1) {
-      if (Math.abs(ex - x) >= Math.abs(ey - y)) {
-        const mid = (x + ex) / 2;
+    if (p.route === "elbow" && Math.abs(ex - x) >= 1 && Math.abs(ey - y) >= 1) {
+      const vertical = p.bendAxis === "vertical" || p.bendAxis === "auto" && Math.abs(ex - x) >= Math.abs(ey - y);
+      if (vertical) {
+        const mid = x + (ex - x) * p.bend;
         points.push([mid, y], [mid, ey]);
       } else {
-        const mid = (y + ey) / 2;
+        const mid = y + (ey - y) * p.bend;
         points.push([x, mid], [ex, mid]);
       }
     }
     return [...points, [ex, ey]];
+  }
+  function arrowBendHandle(el, points) {
+    if (!points) return null;
+    const route = routedPoints(...points, readArrowParameters(el));
+    if (route.length !== 4) return null;
+    const [, a, b] = route;
+    return { x: (a[0] + b[0]) / 2, y: (a[1] + b[1]) / 2, axis: a[0] === b[0] ? "x" : "y" };
   }
   function headPath(type, map, half, length, thickness, radius) {
     const points = {
@@ -412,7 +459,7 @@ property of their respective owners.
   }
   function geometry(p, start, end, connector) {
     if (connector) p = { ...p, round: true, strokeWidth: Math.max(1, p.strokeWidth) };
-    const points = routedPoints(start, end, connector ? p.route : "straight");
+    const points = routedPoints(start, end, connector ? p : { ...p, route: "straight" });
     const shaft = p.shaft ? path(points, connector ? p.radius : 0) : "";
     const reach = p.headLength * p.scale, half = p.headWidth * p.scale / 2;
     const filled = p.head !== "open" && p.head !== "none";
@@ -453,45 +500,64 @@ property of their respective owners.
   var attr = (value) => String(value).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   var view = (w, h) => `0 0 ${w} ${h}`;
   var startView = (kind, id, p, w, h) => `<svg data-el="${attr(id)}" data-shape="${kind}" data-shape-arrow="1" aria-label="${arrowLabel(kind)}" ${datasetAttrs(p)} viewBox="${view(w, h)}" preserveAspectRatio="none"`;
-  function sizing(p) {
+  function shapeBox(p, width) {
+    const pad = p.strokeWidth * p.scale / 2;
+    const natural = p.headLength * p.scale * p.repeat + p.gap * (p.repeat - 1) + 2 * pad;
     return {
-      head: p.headLength * p.scale,
-      pad: p.strokeWidth * p.scale / 2,
-      natural: p.headLength * p.scale * p.repeat + p.gap * (p.repeat - 1) + p.strokeWidth * p.scale
+      w: number(p.shaft ? Math.max(natural + 4, width ?? natural + 4) : natural),
+      h: number((p.headWidth + p.strokeWidth) * p.scale)
     };
   }
-  var repeatsWithoutShaft = (p) => !p.shaft && p.repeat === 2;
-  function minimumArrowWidth(p) {
-    return sizing(p).natural - (repeatsWithoutShaft(p) ? p.gap : 0);
-  }
-  function shapeWithWidth(p, width) {
-    if (repeatsWithoutShaft(p)) p.gap = number(Math.max(0, width - minimumArrowWidth(p)));
-    return p;
-  }
   function shapeGeometry(p, w, h) {
-    const { pad, natural } = sizing(p);
-    const y = h / 2, to = !p.shaft && p.repeat === 1 ? (w + natural) / 2 - pad : w - pad;
-    return geometry({ ...p, strokeWidth: p.strokeWidth * p.scale }, { x: pad, y }, { x: to, y }, false);
+    const pad = p.strokeWidth * p.scale / 2;
+    return geometry({ ...p, strokeWidth: p.strokeWidth * p.scale }, { x: pad, y: h / 2 }, { x: w - pad, y: h / 2 }, false);
   }
   function arrowShapeMarkup({ id, kind, ...options }) {
     if (!id || !arrowShapeKinds.includes(kind)) throw new Error("arrowShapeMarkup requires an id and arrow shape kind");
-    const p = model(kind, options), { natural } = sizing(p);
-    const w = param(options.width, presets[kind].width ?? natural, minimumArrowWidth(p), 5e3);
-    shapeWithWidth(p, w);
-    const h = p.headWidth * p.scale + p.strokeWidth * p.scale;
+    const p = model(kind, options);
+    const { w, h } = shapeBox(p, param(options.width, presets[kind].width ?? 0, 0, 5e3));
     return `${startView(kind, id, p, w, h)} style="width:${w}px;height:${h}px;display:block;overflow:visible">${shapeGeometry(p, w, h)}</svg>`;
   }
   function renderArrowShape(el, w, h) {
-    const p = shapeWithWidth(readModel(el), w);
+    const p = readArrowParameters(el);
     el.setAttribute("viewBox", view(w, h));
-    if (repeatsWithoutShaft(p)) el.dataset.shapeGap = String(p.gap);
     el.innerHTML = shapeGeometry(p, w, h);
   }
-  function resizeArrowShape(el, w, h, initial, mode, scale) {
-    if (mode === "length") return { w: Math.max(minimumArrowWidth(readModel(el)), w), h: initial.h };
-    const k = Math.max(0.1, w === initial.w ? h / initial.h : w / initial.w, 8 / initial.w, 8 / initial.h);
-    el.dataset.shapeArrowScale = String(k * scale);
-    return { w: initial.w * k, h: initial.h * k };
+  function setArrowParameters(el, changes, width = parseFloat(el.style.width)) {
+    const p = model(el.dataset.shape, { ...readArrowParameters(el), ...changes });
+    setFields(el, p);
+    const points = readLineArrow(el);
+    if (points) {
+      el.dataset.shapeArrow = "1";
+      renderLineArrow(el, points);
+      return;
+    }
+    const { w, h } = shapeBox(p, Number.isFinite(width) ? width : void 0);
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
+    renderArrowShape(el, w, h);
+    return { w, h };
+  }
+  function resizeArrowShape(el, w, h, initial, mode, dir, p) {
+    if (mode === "shaft") {
+      if (dir !== "se") return setArrowParameters(el, p, w);
+      const length = p.headLength * p.scale, height = p.headWidth * p.scale;
+      const k2 = 1 + ((w - initial.w) * length + (h - initial.h) * height) / (length * length + height * height);
+      const maxLength = (initial.w - 4) / p.scale - p.strokeWidth;
+      const factor = Math.min(
+        Math.max(4 / p.headLength, 4 / p.headWidth, k2),
+        maxLength / p.headLength,
+        400 / p.headLength,
+        400 / p.headWidth
+      );
+      return setArrowParameters(el, { ...p, headLength: number(p.headLength * factor), headWidth: number(p.headWidth * factor) }, initial.w);
+    }
+    if (mode === "width" && (dir === "e" || dir === "w"))
+      return setArrowParameters(el, { ...p, headLength: number(w / p.scale - p.strokeWidth) });
+    const k = Math.max(0.1, w === initial.w ? h / initial.h : w / initial.w);
+    const minScale = p.repeat > 1 && p.gap < 0 ? (1 - p.gap) / p.headLength : 0;
+    const scale = Math.max(k * p.scale, Math.ceil(minScale * 1e3) / 1e3);
+    return setArrowParameters(el, { ...p, scale: number(scale) });
   }
   function connectorBox(start, end) {
     const pad = 12;
@@ -509,7 +575,7 @@ property of their respective owners.
     const el = document.createElementNS(NS, "svg"), p = model(kind);
     el.dataset.shape = kind;
     el.dataset.shapeArrow = "1";
-    for (const [key, name] of Object.entries(fields)) el.dataset[name] = String(p[key]);
+    setFields(el, p);
     el.setAttribute("aria-label", arrowLabel(kind));
     el.setAttribute("preserveAspectRatio", "none");
     Object.assign(el.style, {
@@ -532,7 +598,7 @@ property of their respective owners.
     return { x, y };
   }
   function renderLineArrow(el, [start, end]) {
-    el.innerHTML = geometry(readModel(el), start, end, true);
+    el.innerHTML = geometry(readArrowParameters(el), start, end, true);
   }
 
   // html-design/src/geometry.js
@@ -1888,7 +1954,7 @@ property of their respective owners.
   }
 
   // html-design/src/editor.css
-  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n  user-select: none;\n}\n.thumb-main:focus-visible {\n  outline: none;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame,\n.thumb-main:focus-visible .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-list:not(.reordering) .thumb:not(.active) .thumb-main:not(:focus-visible):hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb-list:not(.reordering) .thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch, .tbar .color-control .shape-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.text-tools .number-stepper { width: 64px; }\n.text-tools .number-stepper input { width: 47px; font-size: 14px; }\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; padding:0; }\n.color-control:hover { background:var(--hover); }\n.color-control .color-swatch, .color-control .shape-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap:0; width:36px; }\n.add-text .icon:first-child { width:17px; height:17px; }\n.add-text .icon:last-child { width:10px; height:10px; }\n.text-style-palette { width:245px; }\n.text-style-palette button { display:flex; justify-content:flex-start; width:100%; height:44px; gap:8px; padding:0 9px; text-align:left; }\n.text-style-palette .style-preview { flex:none; display:block; width:46px; overflow:hidden; text-align:center; line-height:1; }\n.text-style-palette .style-description { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }\n.add-shape { gap: 0; width: 36px; }\n.add-shape .icon:first-child { width: 17px; height: 17px; }\n.add-shape .icon:last-child { width: 10px; height: 10px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="s"]):not([data-h="se"]) { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.color-palette { width:306px; max-width:calc(100vw - 20px); padding:14px; color:#292929; }\n.color-palette .palette-heading { font-size:13px; color:#686868; margin-bottom:10px; }\n.palette-current, .palette-recommended { display:grid; grid-template-columns:repeat(9, 1fr); gap:5px; }\n.color-palette .palette-swatch { display:block; width:100%; height:28px; min-width:0; padding:0; border:1px solid #00000014; border-radius:6px; }\n.color-palette .palette-swatch:hover { outline:2px solid #777; outline-offset:1px; }\n.color-palette .palette-swatch[aria-pressed="true"] { outline:2px solid #666; outline-offset:1px; }\n.color-palette .palette-add { display:flex; align-items:center; justify-content:center; background:#fff; color:#4c4c4c; }\n.color-palette .palette-add .icon { width:18px; height:18px; }\n.palette-divider { height:1px; margin:14px 0; background:#ececec; }\n.palette-recommended { row-gap:5px; }\n.palette-custom-heading { display:flex; align-items:center; gap:5px; margin-bottom:13px; font-size:13px; }\n.color-palette .palette-back { width:27px; height:27px; padding:5px; justify-content:center; }\n.palette-sv { position:relative; height:148px; border-radius:7px; background:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent),var(--palette-hue,#f00); cursor:crosshair; touch-action:none; }\n.palette-cursor { position:absolute; left:100%; top:0; width:13px; height:13px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0008; transform:translate(-50%,-50%); pointer-events:none; }\n.palette-hue { display:block; width:100%; height:16px; margin:15px 0; appearance:none; border-radius:9px; background:linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); }\n.palette-hue::-webkit-slider-thumb { appearance:none; width:16px; height:16px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0006; background:#fff; cursor:pointer; }\n.palette-hex-form { display:flex; align-items:center; gap:7px; }\n.palette-hex-form label { color:#666; }\n.palette-hex-form input { flex:1; min-width:0; height:31px; padding:0 8px; border:1px solid #ddd; border-radius:5px; font:inherit; color:#292929; }\n.color-palette .palette-hex-form button { width:auto; height:31px; padding:0 12px; background:#242424; color:#fff; justify-content:center; }\n.palette-hex-error { margin:7px 0 0; color:#b32727; font-size:11px; }\n.shape-palette { display: grid; gap: 5px; min-width: 0; padding: 8px; }\n.shape-row { display: flex; gap: 3px; }\n.shape-row + .shape-row { border-top: 1px solid #ececec; padding-top: 5px; }\n.sel.arrow-length i:not([data-h="e"]):not([data-h="w"]) { display: none; }\n.shape-palette[hidden] { display: none; }\n.shape-palette button { width: clamp(32px, 8vw, 39px); height: 38px; padding: 7px; justify-content: center; }\n.shape-palette svg { width: 24px; height: 24px; }\n.shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }\n.shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }\n.shape-stroke-color .shape-swatch { background: transparent; border: 3px solid currentColor; }\n.shape-width-control { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }\n.number-stepper { display: inline-flex; align-items: center; height: 29px; width: 52px; border-radius: 5px; background: #383838; }\n.number-stepper input { width: 35px; min-width: 0; height: 27px; border: 0; padding: 0 2px; outline: 0; background: transparent; color: #fff; text-align: center; appearance: textfield; font-variant-numeric: tabular-nums; }\n.number-stepper input::-webkit-inner-spin-button { appearance: none; }\n.number-steps { display: flex; flex-direction: column; width: 15px; height: 27px; }\n.number-steps button { width: 15px; min-width: 15px; height: 13px; min-height: 13px; padding: 0; border-radius: 2px; color: #c9c9cc; }\n.number-steps button .icon { width: 10px; height: 10px; }\n.shape-radius input, .shape-adjust input { width: 82px; accent-color: #c9c9cc; }\n.shape-more-section[hidden] { display: none; }\n.shape-more-section .shape-adjust { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; font-size: 12px; }\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n    gap: 2px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .tools { gap: 0; }\n  .head .layout-toggle { margin-inline: 0; }\n  .head .layout-toggle button { padding-inline: 3px; font-size: 10px; }\n  .head .tools > [data-act="add-text"],\n  .head .tools > [data-act="add-image"],\n  .head .tools > [data-act="add-shape"] { width: 27px; min-width: 27px; padding: 0; }\n  .head .add-shape .icon:last-child { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n\n.page-size-dialog{position:fixed;inset:0;z-index:2147483647;background:#0005;display:grid;place-items:center;padding:16px;color:#202020;font:13px/1.5 system-ui,sans-serif}\n.size-box{width:min(360px,100%);box-sizing:border-box;background:#fff;border-radius:12px;padding:22px}\n.size-heading,.size-fields,.size-actions{display:flex;align-items:center;gap:12px}.size-heading h2{font-size:17px;margin:0;flex:1}.size-close{padding:0;width:28px}.size-page{color:#646464;margin:4px 0 20px}.size-box label{display:block;flex:1;min-width:0}.size-box select,.size-box input{box-sizing:border-box;width:100%;margin:6px 0 16px;padding:9px 10px;background:#f2f2f2;border:0;border-radius:6px;color:#202020;font:inherit}.size-fields label{position:relative}.size-fields input{padding-right:30px}.size-fields span{position:absolute;right:10px;top:35px;color:#646464}.size-note{font-size:12px;color:#646464;margin:0 0 20px}.size-error{font-size:12px;color:#b42318}.size-actions{justify-content:flex-end}.size-actions button{padding-inline:14px}.size-box :focus-visible{outline:2px solid #258bff;outline-offset:2px}\n.workspace-switch{flex-shrink:0;margin-inline:auto;background:#e8e8e8}.workspace-switch button{font-size:12px;padding:4px 9px;min-width:0}.workspace-switch [aria-pressed=true]{background:#fff;color:#202020}.workspace-label{position:fixed;height:24px;min-height:24px;justify-content:flex-start;padding:0;background:transparent;font-size:11px;color:#646464;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:auto}.workspace-label:hover{background:transparent;color:#202020}.workspace-ghost{position:fixed;inset:0;pointer-events:none;z-index:2147483641}.workspace-ghost *{pointer-events:none!important}.workspace-labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}\n@media(max-width:760px){:host([data-workspace-enabled]) .page-title{display:none}:host([data-workspace-enabled]) .footer{gap:2px}:host([data-workspace-enabled]) .workspace-switch button{padding-inline:6px;font-size:11px}}\n\n.arrow-end {\n  position: fixed;\n  z-index: 2147483645;\n  width: 11px;\n  height: 11px;\n  border: 1px solid var(--selection);\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 1px #ffffff80;\n  transform: translate(-50%, -50%);\n  cursor: crosshair;\n  pointer-events: auto;\n}\n.arrow-preview, .arrow-preview * {\n  pointer-events: none !important;\n}\n.arrow-preview {\n  z-index: 2147483643;\n}\n';
+  var editor_default = ':host {\n  all: initial;\n  --paper: #fff;\n  --workspace: #f2f2f2;\n  --hover: #ededed;\n  --active: #e4e4e4;\n  --ink: #202020;\n  --muted: #646464;\n  --line: #e7e7e7;\n  --selection: #258bff;\n  --guide: #10b981;\n  --radius: 8px;\n  --nav: 170px;\n  --head: 52px;\n  --foot: 40px;\n  font:\n    13px/1.35 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    "PingFang SC",\n    sans-serif;\n  color: var(--ink);\n  color-scheme: light;\n}\n* {\n  box-sizing: border-box;\n}\n[hidden] {\n  display: none !important;\n}\n::selection {\n  background: #d5d5d5;\n  color: #171717;\n}\nbutton,\ninput,\nselect,\ntextarea {\n  font: inherit;\n  color: inherit;\n}\nbutton {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 7px;\n  min-width: 32px;\n  height: 32px;\n  padding: 0 9px;\n  border: 0;\n  border-radius: var(--radius);\n  background: transparent;\n  cursor: pointer;\n  white-space: nowrap;\n  line-height: 1.2;\n}\nbutton:hover:not(:disabled) {\n  background: var(--hover);\n}\nbutton[aria-pressed="true"] {\n  background: var(--active);\n}\nbutton:disabled {\n  opacity: 0.35;\n  cursor: default;\n}\nbutton:focus-visible,\ninput:focus-visible,\nselect:focus-visible,\n[role="button"]:focus-visible {\n  outline: 2px solid var(--selection);\n  outline-offset: 2px;\n}\nbutton.primary {\n  background: #202020;\n  color: #fff;\n}\nbutton.primary:hover:not(:disabled) {\n  background: #3c3c3c;\n}\n.icon {\n  display: block;\n  flex-shrink: 0;\n  pointer-events: none;\n}\n.icon-only {\n  width: 32px;\n  padding: 0;\n}\n.head {\n  position: fixed;\n  inset: 0 0 auto;\n  height: var(--head);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  gap: 20px;\n  padding: 0 16px;\n  background: var(--paper);\n}\n.head [data-act="edit"],\n.head [data-act="done"],\n.head [data-act="preview"],\n.head [data-act="export"] {\n  font-size: 13px;\n}\n.grp {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n  min-width: 0;\n}\n.document {\n  flex: 1;\n  gap: 9px;\n}\n.document-title {\n  min-width: 0;\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-weight: 550;\n}\n.save-state {\n  min-width: 0;\n  max-width: 155px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  justify-content: flex-start;\n  white-space: nowrap;\n  color: var(--muted);\n  font-size: 11px;\n  padding: 0 5px;\n}\n.save-state .state-text {\n  overflow: hidden;\n  text-overflow: ellipsis;\n}\n.save-state .icon {\n  width: 14px;\n  height: 14px;\n}\n.tools {\n  flex-shrink: 0;\n}\n.layout-toggle {\n  margin: 0 7px;\n}\n.layout-toggle button {\n  gap: 5px;\n}\n.done-button {\n  background: var(--hover);\n}\n.actions {\n  flex: 1;\n  justify-content: flex-end;\n}\n.group-gap {\n  margin-left: 13px;\n}\n.view-seg {\n  display: flex;\n  align-items: center;\n  gap: 0;\n}\n.view-seg button {\n  border-radius: 7px;\n}\n.view-seg .fullscreen {\n  padding-inline: 6px;\n  min-width: 26px;\n}\n.view-seg .fullscreen .icon {\n  width: 16px;\n  height: 16px;\n}\n.nav {\n  position: fixed;\n  left: 0;\n  top: var(--head);\n  bottom: 0;\n  width: var(--nav);\n  z-index: 2147483645;\n  display: flex;\n  flex-direction: column;\n  background: #f8f8f8;\n}\n.nav-head {\n  height: 47px;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 13px 0 20px;\n  flex-shrink: 0;\n}\n.nav-head strong {\n  font-size: 12px;\n  font-weight: 550;\n  color: var(--muted);\n}\n.thumb-list {\n  flex: 1;\n  min-height: 0;\n  overflow: auto;\n  padding: 6px 12px 24px;\n  scrollbar-width: thin;\n  scrollbar-color: #cecece transparent;\n  overscroll-behavior: contain;\n}\n.thumb {\n  position: relative;\n  margin-bottom: 18px;\n  border-radius: 7px;\n}\n.thumb-main {\n  outline: 0;\n  cursor: pointer;\n  position: relative;\n  user-select: none;\n}\n.thumb-main:focus-visible {\n  outline: none;\n}\n.frame {\n  position: relative;\n  width: 146px;\n  overflow: hidden;\n  background: white;\n  border-radius: 3px;\n  box-shadow: 0 0 0 1px #dedede;\n}\n.frame iframe {\n  position: absolute;\n  left: 0;\n  top: 0;\n  border: 0;\n  transform-origin: 0 0;\n  pointer-events: none;\n  background: #fff;\n}\n.thumb.active .frame,\n.thumb-main:focus-visible .frame {\n  box-shadow: 0 0 0 1.5px var(--selection);\n}\n.thumb.active .label {\n  color: #171717;\n}\n.thumb-list:not(.reordering) .thumb:not(.active) .thumb-main:not(:focus-visible):hover .frame {\n  box-shadow: 0 0 0 1.5px #8a8a8a;\n}\n.label {\n  padding: 8px 28px 0 2px;\n  color: #666;\n  font-size: 11px;\n  white-space: nowrap;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  line-height: 16px;\n}\n.thumb-more {\n  position: absolute;\n  right: 0;\n  bottom: -4px;\n  width: 26px;\n  height: 26px;\n  padding: 0;\n  opacity: 0;\n  background: #f8f8f8;\n}\n.thumb-list:not(.reordering) .thumb:hover .thumb-more,\n.thumb:focus-within .thumb-more,\n.thumb.active .thumb-more {\n  opacity: 1;\n}\n.thumb-more .icon {\n  width: 15px;\n  height: 15px;\n}\n.thumb.dragging {\n  opacity: 0.35;\n}\n.thumb.drop-before::before,\n.thumb.drop-after::after {\n  content: "";\n  position: absolute;\n  left: 0;\n  right: 0;\n  height: 2px;\n  background: #333;\n  pointer-events: none;\n}\n.thumb.drop-before::before {\n  top: -10px;\n}\n.thumb.drop-after::after {\n  bottom: -10px;\n}\n.rename-input {\n  width: 100%;\n  height: 25px;\n  padding: 2px 4px;\n  border: 1px solid #999;\n  border-radius: 4px;\n  background: #fff;\n  font-size: 12px;\n}\n.empty-list {\n  font-size: 12px;\n  color: var(--muted);\n  padding: 10px 5px;\n  line-height: 1.7;\n}\n.footer {\n  position: fixed;\n  bottom: 0;\n  left: var(--nav);\n  right: 0;\n  height: var(--foot);\n  z-index: 2147483645;\n  display: flex;\n  align-items: center;\n  justify-content: space-between;\n  padding: 0 12px;\n  background: #fff;\n  gap: 14px;\n}\n.footer button {\n  height: 28px;\n  min-width: 28px;\n  padding: 0 5px;\n}\n.page-controls {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n  min-width: 0;\n}\n.pageno {\n  font-size: 12px;\n  color: #555;\n  font-variant-numeric: tabular-nums;\n  white-space: nowrap;\n  text-align: center;\n  min-width: 46px;\n}\n.page-title {\n  max-width: 260px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #666;\n  margin-left: 9px;\n  justify-content: flex-start;\n}\n.page-title:disabled {\n  opacity: 1;\n}\n.zoom {\n  display: flex;\n  align-items: center;\n  gap: 2px;\n}\n.zoom .zv {\n  min-width: 49px;\n  font-size: 12px;\n  font-variant-numeric: tabular-nums;\n}\n.zoom .fit {\n  margin-left: 7px;\n}\n.footer .icon {\n  width: 16px;\n  height: 16px;\n}\n.tbar {\n  --hover: #353535;\n  --active: #4a4a4a;\n  --muted: #d0d0d0;\n  position: fixed;\n  left: calc(var(--nav) + (100vw - var(--nav)) / 2);\n  top: calc(var(--head) + 10px);\n  transform: translateX(-50%);\n  z-index: 2147483646;\n  display: flex;\n  align-items: center;\n  gap: 4px;\n  padding: 5px 6px;\n  background: #202020;\n  color: #f8f8f8;\n  border-radius: 10px;\n  box-shadow: 0 3px 16px #00000014;\n  max-width: calc(100vw - var(--nav) - 24px);\n}\n.text-tools,\n.image-tools,\n.object-tools {\n  display: flex;\n  align-items: center;\n  gap: 3px;\n}\n.tbar .seg { background: #353535; }\n.tbar .seg button[aria-pressed="true"] { background: #555; color: #fff; box-shadow: none; }\n.image-tools > [data-act="image-replace"] { font-size: 12px; font-weight: 400; gap: 5px; }\n.tbar .color-control .color-swatch, .tbar .color-control .shape-swatch { box-shadow: 0 0 0 1px #ffffff90; }\n.text-tools .number-stepper { width: 64px; }\n.text-tools .number-stepper input { width: 47px; font-size: 14px; }\n.color-control { position: relative; width:32px; height:32px; display:flex; align-items:center; justify-content:center; border-radius:7px; cursor:pointer; padding:0; }\n.color-control:hover { background:var(--hover); }\n.color-control .color-swatch, .color-control .shape-swatch {\n  display: block;\n  width: 19px;\n  height: 19px;\n  border-radius: 50%;\n  background: currentColor;\n  box-shadow: inset 0 0 0 1px #0002;\n}\n.add-text { gap:0; width:36px; }\n.add-text .icon:first-child { width:17px; height:17px; }\n.add-text .icon:last-child { width:10px; height:10px; }\n.text-style-palette { width:245px; }\n.text-style-palette button { display:flex; justify-content:flex-start; width:100%; height:44px; gap:8px; padding:0 9px; text-align:left; }\n.text-style-palette .style-preview { flex:none; display:block; width:46px; overflow:hidden; text-align:center; line-height:1; }\n.text-style-palette .style-description { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }\n.add-shape { gap: 0; width: 36px; }\n.add-shape .icon:first-child { width: 17px; height: 17px; }\n.add-shape .icon:last-child { width: 10px; height: 10px; }\n.menu-panel[data-menu="more"], .menu-panel[data-menu="element"], .menu-panel[data-menu="page"] { width: 190px; min-width: 190px; }\n.seg {\n  display: flex;\n  padding: 2px;\n  border-radius: 7px;\n  background: #f3f3f3;\n}\n.seg button {\n  height: 27px;\n  font-size: 12px;\n  padding: 0 10px;\n}\n.seg button[aria-pressed="true"] {\n  background: #fff;\n  box-shadow: 0 1px 3px #0001;\n}\n.compact-select {\n  border: 0;\n  background: #f4f4f4;\n  height: 29px;\n  padding: 0 7px;\n  border-radius: 5px;\n  font-size: 12px;\n}\n.tbar .icon {\n  width: 17px;\n  height: 17px;\n}\n.sel {\n  position: fixed;\n  display: none;\n  border: 1px solid var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.sel.typing {\n  border-style: dashed;\n}\n.sel i {\n  position: absolute;\n  width: 8px;\n  height: 8px;\n  margin: -4px 0 0 -4px;\n  background: #fff;\n  border: 1px solid var(--selection);\n  border-radius: 1px;\n  pointer-events: auto;\n  box-shadow: 0 0 0 1px #ffffff80;\n}\n.sel.typing i {\n  display: none;\n}\n.sel.multiple i {\n  display: none;\n}\n.sel.group i[data-h="n"],.sel.group i[data-h="s"],.sel.group i[data-h="e"],.sel.group i[data-h="w"] { display:none; }\n.sel.text-box i:not([data-h="w"]):not([data-h="e"]):not([data-h="s"]):not([data-h="se"]) { display:none; }\n.sel.unsupported i { display:none; }\n.rotate-handle {\n  position:fixed; width:24px; min-width:24px; height:24px; padding:4px; margin:-12px;\n  border:1px solid var(--selection); border-radius:50%; background:var(--paper);\n  color:var(--selection); z-index:2147483645; cursor:grab;\n  box-shadow:0 0 0 1px #ffffff80;\n}\n.rotate-handle .icon { width:14px; height:14px; }\n.rotate-handle:active { cursor:grabbing; }\n.rotation-feedback {\n  position:fixed; padding:3px 6px; border-radius:5px; background:#202020;\n  color:#fff; font-size:11px; font-variant-numeric:tabular-nums;\n  pointer-events:none; z-index:2147483645;\n}\n.rotation-panel label { display:flex; align-items:center; gap:6px; margin:4px 6px 8px; }\n.rotation-angle { width:80px; height:28px; border:1px solid var(--line); border-radius:5px; padding:3px 6px; }\n.rotation-multiple { margin:4px 6px; font-size:12px; color:var(--muted); line-height:1.5; }\n.selection-member {\n  position: fixed;\n  border: 1px dashed var(--selection);\n  box-shadow: 0 0 0 1px #ffffffb3;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.marquee {\n  position: fixed;\n  border: 1px solid var(--selection);\n  background: #258bff18;\n  pointer-events: none;\n  z-index: 2147483644;\n}\n.selection-count {\n  padding: 0 7px;\n  color: var(--muted);\n  font-size: 12px;\n  white-space: nowrap;\n}\n.guides {\n  position: fixed;\n  left: var(--nav);\n  top: var(--head);\n  width: calc(100vw - var(--nav));\n  height: calc(100vh - var(--head) - var(--foot));\n  overflow: hidden;\n  pointer-events: none;\n  z-index: 2147483643;\n  fill: none;\n}\n.guide-halo {\n  stroke: #ffffffb3;\n  stroke-width: 3px;\n}\n.guide-line {\n  stroke: var(--guide);\n  stroke-width: 1px;\n}\n.guide-distance-bg { fill: #202020; }\n.guide-distance {\n  fill: #fff;\n  stroke: none;\n  font-family: inherit;\n  font-size: 11px;\n  font-variant-numeric: tabular-nums;\n}\n:host([data-nav-hidden]) .guides {\n  left: 0;\n  width: 100vw;\n}\n.sel i::before {\n  content: "";\n  position: absolute;\n  inset: -5px;\n}\n[data-h="nw"] {\n  left: 0;\n  top: 0;\n  cursor: nwse-resize;\n}\n[data-h="n"] {\n  left: 50%;\n  top: 0;\n  cursor: ns-resize;\n}\n[data-h="ne"] {\n  left: 100%;\n  top: 0;\n  cursor: nesw-resize;\n}\n[data-h="e"] {\n  left: 100%;\n  top: 50%;\n  cursor: ew-resize;\n}\n[data-h="se"] {\n  left: 100%;\n  top: 100%;\n  cursor: nwse-resize;\n}\n[data-h="s"] {\n  left: 50%;\n  top: 100%;\n  cursor: ns-resize;\n}\n[data-h="sw"] {\n  left: 0;\n  top: 100%;\n  cursor: nesw-resize;\n}\n[data-h="w"] {\n  left: 0;\n  top: 50%;\n  cursor: ew-resize;\n}\n.menu-panel {\n  position: fixed;\n  z-index: 2147483647;\n  min-width: 180px;\n  max-width: min(330px, calc(100vw - 20px));\n  max-height: 70vh;\n  overflow: auto;\n  padding: 6px;\n  border-radius: 10px;\n  background: white;\n  box-shadow: 0 6px 28px #00000024;\n  font-size: 12px;\n}\n.menu-panel button {\n  width: 100%;\n  justify-content: flex-start;\n  height: 34px;\n  padding: 0 9px;\n  border-radius: 6px;\n  font-size: 12px;\n}\n.color-palette { width:306px; max-width:calc(100vw - 20px); padding:14px; color:#292929; }\n.color-palette .palette-heading { font-size:13px; color:#686868; margin-bottom:10px; }\n.palette-current, .palette-recommended { display:grid; grid-template-columns:repeat(9, 1fr); gap:5px; }\n.color-palette .palette-swatch { display:block; width:100%; height:28px; min-width:0; padding:0; border:1px solid #00000014; border-radius:6px; }\n.color-palette .palette-swatch:hover { outline:2px solid #777; outline-offset:1px; }\n.color-palette .palette-swatch[aria-pressed="true"] { outline:2px solid #666; outline-offset:1px; }\n.color-palette .palette-add { display:flex; align-items:center; justify-content:center; background:#fff; color:#4c4c4c; }\n.color-palette .palette-add .icon { width:18px; height:18px; }\n.palette-divider { height:1px; margin:14px 0; background:#ececec; }\n.palette-recommended { row-gap:5px; }\n.palette-custom-heading { display:flex; align-items:center; gap:5px; margin-bottom:13px; font-size:13px; }\n.color-palette .palette-back { width:27px; height:27px; padding:5px; justify-content:center; }\n.palette-sv { position:relative; height:148px; border-radius:7px; background:linear-gradient(to top,#000,transparent),linear-gradient(to right,#fff,transparent),var(--palette-hue,#f00); cursor:crosshair; touch-action:none; }\n.palette-cursor { position:absolute; left:100%; top:0; width:13px; height:13px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0008; transform:translate(-50%,-50%); pointer-events:none; }\n.palette-hue { display:block; width:100%; height:16px; margin:15px 0; appearance:none; border-radius:9px; background:linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00); }\n.palette-hue::-webkit-slider-thumb { appearance:none; width:16px; height:16px; border:2px solid white; border-radius:50%; box-shadow:0 0 0 1px #0006; background:#fff; cursor:pointer; }\n.palette-hex-form { display:flex; align-items:center; gap:7px; }\n.palette-hex-form label { color:#666; }\n.palette-hex-form input { flex:1; min-width:0; height:31px; padding:0 8px; border:1px solid #ddd; border-radius:5px; font:inherit; color:#292929; }\n.color-palette .palette-hex-form button { width:auto; height:31px; padding:0 12px; background:#242424; color:#fff; justify-content:center; }\n.palette-hex-error { margin:7px 0 0; color:#b32727; font-size:11px; }\n.shape-palette { display: grid; gap: 5px; min-width: 0; padding: 8px; }\n.shape-row { display: flex; gap: 3px; }\n.shape-row + .shape-row { border-top: 1px solid #ececec; padding-top: 5px; }\n.sel.arrow-shaft i:not([data-h="e"]):not([data-h="w"]):not([data-h="se"]),\n.sel.arrow-corners i[data-h="e"], .sel.arrow-corners i[data-h="w"],\n.sel.arrow-corners i[data-h="n"], .sel.arrow-corners i[data-h="s"],\n.sel.arrow-width i[data-h="n"], .sel.arrow-width i[data-h="s"] { display: none; }\n.arrow-parameter-section[hidden], .arrow-parameter-section button[hidden] { display: none; }\n.arrow-parameter-fields label {\n  display: flex; align-items: center; justify-content: space-between; gap: 15px;\n  padding: 3px 8px; font-size: 12px; white-space: nowrap;\n}\n.arrow-parameter-fields input {\n  width: 68px; padding: 3px 6px; border: 1px solid #e2e2e2;\n  border-radius: 4px; font: inherit; text-align: right; color: inherit;\n}\n.shape-palette[hidden] { display: none; }\n.shape-palette button { width: clamp(32px, 8vw, 39px); height: 38px; padding: 7px; justify-content: center; }\n.shape-palette svg { width: 24px; height: 24px; }\n.shape-tools { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #eee; }\n.shape-tools label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }\n.shape-stroke-color .shape-swatch { background: transparent; border: 3px solid currentColor; }\n.shape-width-control { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; flex-shrink: 0; }\n.number-stepper { display: inline-flex; align-items: center; height: 29px; width: 52px; border-radius: 5px; background: #383838; }\n.number-stepper input { width: 35px; min-width: 0; height: 27px; border: 0; padding: 0 2px; outline: 0; background: transparent; color: #fff; text-align: center; appearance: textfield; font-variant-numeric: tabular-nums; }\n.number-stepper input::-webkit-inner-spin-button { appearance: none; }\n.number-steps { display: flex; flex-direction: column; width: 15px; height: 27px; }\n.number-steps button { width: 15px; min-width: 15px; height: 13px; min-height: 13px; padding: 0; border-radius: 2px; color: #c9c9cc; }\n.number-steps button .icon { width: 10px; height: 10px; }\n.shape-radius input, .shape-adjust input { width: 82px; accent-color: #c9c9cc; }\n.shape-more-section[hidden] { display: none; }\n.shape-more-section .shape-adjust { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px; font-size: 12px; }\n.menu-panel .icon {\n  width: 16px;\n  height: 16px;\n}\n.menu-caption {\n  font-size: 11px;\n  color: #6a6a6a;\n  padding: 8px 9px 4px;\n}\n.menu-separator {\n  height: 1px;\n  background: #eee;\n  margin: 5px 7px;\n}\n.status-detail {\n  font-size: 12px;\n  line-height: 1.65;\n  white-space: normal;\n  margin: 6px 8px;\n  color: #555;\n  max-width: 265px;\n}\n.status-panel button {\n  height: auto;\n  min-height: 34px;\n  white-space: normal;\n  text-align: left;\n}\n.modal,\n.help-dialog {\n  position: fixed;\n  inset: 0;\n  z-index: 2147483647;\n  background: #0005;\n  display: flex;\n  padding: 36px;\n  font:\n    13px/1.4 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  color: #222;\n}\n.box {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  background: #fff;\n  border-radius: 12px;\n  overflow: hidden;\n  min-width: 0;\n}\n.mh {\n  display: flex;\n  align-items: center;\n  gap: 7px;\n  padding: 11px 16px;\n  background: #f6f6f6;\n  flex-wrap: wrap;\n}\n.mh .hint {\n  color: #666;\n  font-size: 11px;\n}\n.mh .sp {\n  flex: 1;\n}\ntextarea {\n  flex: 1;\n  min-height: 0;\n  border: 0;\n  outline: none;\n  resize: none;\n  padding: 18px;\n  font:\n    12px/1.6 ui-monospace,\n    Menlo,\n    Consolas,\n    monospace;\n  white-space: pre;\n  tab-size: 2;\n  caret-color: #222;\n}\n.toast {\n  position: fixed;\n  left: 50%;\n  bottom: 65px;\n  transform: translateX(-50%);\n  max-width: calc(100vw - 40px);\n  padding: 10px 16px;\n  border-radius: 9px;\n  background: #222;\n  color: #fff;\n  font:\n    12px/1.5 -apple-system,\n    BlinkMacSystemFont,\n    "Segoe UI",\n    sans-serif;\n  opacity: 0;\n  transition: opacity 0.15s;\n  pointer-events: none;\n  z-index: 2147483647;\n}\n.toast.show {\n  opacity: 1;\n}\n.empty-canvas {\n  position: fixed;\n  left: var(--nav);\n  right: 0;\n  top: var(--head);\n  bottom: var(--foot);\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  flex-direction: column;\n  gap: 14px;\n  color: #666;\n  font-size: 13px;\n}\n.empty-canvas p {\n  margin: 0;\n}\n.empty-canvas > .icon {\n  width: 30px;\n  height: 30px;\n  color: #aaa;\n}\n.play-controls {\n  position: fixed;\n  bottom: 22px;\n  left: 50%;\n  transform: translateX(-50%);\n  z-index: 2147483647;\n  display: flex;\n  align-items: center;\n  gap: 5px;\n  padding: 5px 8px;\n  background: #ffffffed;\n  border-radius: 10px;\n  box-shadow: 0 4px 18px #0002;\n  opacity: 0;\n  transition: opacity 0.15s;\n}\n.play-controls button {\n  height: 31px;\n  min-width: 31px;\n}\n.play-controls.visible,\n.play-controls:hover,\n.play-controls:focus-within {\n  opacity: 1;\n}\n.play-controls .play-title {\n  max-width: 190px;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n  font-size: 12px;\n  color: #555;\n  margin: 0 7px;\n}\n.play-controls .pageno {\n  font-size: 12px;\n}\n.play-exit {\n  position: fixed;\n  top: 16px;\n  right: 16px;\n  z-index: 2147483647;\n  background: #fffffff0;\n  color: #222;\n}\n:host([data-playing]) .head,\n:host([data-playing]) .nav,\n:host([data-playing]) .footer,\n:host([data-playing]) .tbar,\n:host([data-playing]) .sel,\n:host([data-playing]) .guides,\n:host([data-playing]) .selection-members,\n:host([data-playing]) .marquee,\n:host([data-playing]) .empty-canvas {\n  display: none !important;\n}\n:host(:not([data-playing])) .play-controls,\n:host(:not([data-playing])) .play-exit {\n  display: none !important;\n}\n:host([data-nav-hidden]) .nav {\n  display: none;\n}\n:host([data-nav-hidden]) .footer {\n  left: 0;\n}\n:host([data-nav-hidden]) .tbar {\n  left: 50%;\n  max-width: calc(100vw - 24px);\n}\n:host([data-nav-hidden]) .empty-canvas {\n  left: 0;\n}\n@media (max-width: 1050px) {\n  .head {\n    gap: 9px;\n    padding: 0 10px;\n  }\n  .document-title {\n    max-width: 140px;\n  }\n  .save-state {\n    max-width: 95px;\n    font-size: 10px;\n  }\n  .group-gap {\n    margin-left: 6px;\n  }\n  .actions {\n    flex: initial;\n  }\n  .document {\n    flex: 1;\n  }\n  .head button {\n    padding-inline: 7px;\n  }\n  .actions .button-label {\n    display: none;\n  }\n}\n@media (max-width: 760px) {\n  :host {\n    --nav: 170px;\n  }\n  .head {\n    gap: 4px;\n  }\n  .document-title {\n    max-width: 100px;\n    font-size: 12px;\n  }\n  .save-state {\n    max-width: 27px;\n  }\n  .save-state .state-text {\n    display: none;\n  }\n  .head .preview-button span,\n  .head .export-label {\n    display: none;\n  }\n  .head .group-gap {\n    margin-left: 2px;\n  }\n  .head .layout-toggle {\n    margin-inline: 3px;\n  }\n  .head .layout-toggle button { padding-inline: 6px; font-size: 11px; }\n  .page-title {\n    max-width: 110px;\n  }\n  .footer {\n    padding: 0 7px;\n  }\n  .tbar {\n    gap: 1px;\n    padding: 4px;\n  }\n  .tbar button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .nav-head {\n    padding-inline: 12px;\n  }\n}\n@media (max-width: 540px) {\n  :host {\n    --nav: 0px;\n  }\n  .nav {\n    display: none !important;\n  }\n  .footer {\n    left: 0;\n  }\n  .tbar {\n    left: 50%;\n    max-width: calc(100vw - 16px);\n  }\n  .document-title {\n    max-width: 80px;\n  }\n  .head {\n    padding-inline: 6px;\n    gap: 2px;\n  }\n  .head button {\n    padding-inline: 5px;\n    min-width: 28px;\n  }\n  .head .document {\n    gap: 2px;\n  }\n  .head .nav-toggle {\n    display: inline-flex;\n  }\n  .head .selection-tool {\n    display: none;\n  }\n  .head .done-button span,\n  .head .preview-button > .icon:last-child {\n    display: none;\n  }\n  :host([data-editing]) .head .preview-button {\n    display: none;\n  }\n  .head .document { flex: 0; gap: 3px; }\n  .head .document-title { display: none; }\n  .head .save-state { width: 22px; min-width: 22px; max-width: 22px; padding: 0; flex-shrink: 0; }\n  .head .tools > [data-act="undo"], .head .tools > [data-act="redo"] { display: none; }\n  .head .tools { gap: 0; }\n  .head .layout-toggle { margin-inline: 0; }\n  .head .layout-toggle button { padding-inline: 3px; font-size: 10px; }\n  .head .tools > [data-act="add-text"],\n  .head .tools > [data-act="add-image"],\n  .head .tools > [data-act="add-shape"] { width: 27px; min-width: 27px; padding: 0; }\n  .head .add-shape .icon:last-child { display: none; }\n  .head .actions { flex: initial; }\n  .head [data-act="export"] > .icon:last-child {\n    display: none;\n  }\n  :host([data-mobile-nav]) .nav {\n    display: flex !important;\n    width: 170px;\n    bottom: 40px;\n    box-shadow: 5px 0 20px #0001;\n  }\n  .head .actions {\n    gap: 1px;\n  }\n  .page-title {\n    max-width: 90px;\n  }\n  .footer .fit span {\n    display: none;\n  }\n  .modal,\n.help-dialog {\n    padding: 10px;\n  }\n  .mh .hint {\n    display: none;\n  }\n}\n@media (prefers-reduced-motion: reduce) {\n  * {\n    transition: none !important;\n    scroll-behavior: auto !important;\n  }\n}\n@media print {\n  :host {\n    display: none !important;\n  }\n}\n\n.more-text-formats {\n  display: flex;\n  gap: 4px;\n  padding: 3px 6px;\n}\n.more-text-formats button {\n  width: 32px;\n  padding: 0;\n  justify-content: center;\n}\n:host([data-readonly]) .tools {\n  display: none;\n}\n\n.play-exit:focus-visible {\n  opacity: 1 !important;\n}\n\n/* Experimental text sizing; diagnostics stay inside the editor shadow root. */\n.text-layout-panel { width: 268px; }\n.text-layout-panel strong { display: block; padding: 8px 10px 0; font-weight: 550; }\n.text-layout-status { margin: 8px 10px 12px; max-width: 232px; color: var(--muted); line-height: 1.6; }\n.text-layout-status[data-overflow="true"] { color: #a84c18; }\n\n/* AI review controls live outside the scaled content. */\n.review-actions { position:fixed; z-index:2147483645; display:flex; align-items:center; padding:3px; gap:0; background:var(--paper); border-radius:8px; box-shadow:0 3px 12px #0002; }\n.review-actions button { height:30px; min-width:62px; font-size:12px; border-radius:6px; }\n.review-accept { background:#202020; color:#fff; }\nbutton.review-accept:hover:not(:disabled) { background:#3c3c3c; }\nbutton[aria-disabled=true] { opacity:.45; cursor:default; }\n.review-summary { position:fixed; z-index:2147483646; width:280px; background:var(--paper); border-radius:8px; box-shadow:0 5px 20px #0002; }\n.review-summary-bar { display:flex; padding:4px; gap:4px; }\n.review-trigger { flex:1; justify-content:space-between; font-size:12px; }\n.review-trigger .icon { transform:rotate(180deg); }\n.review-trigger[aria-expanded=true] .icon { transform:none; }\n.review-summary-bar .review-accept { height:30px; font-size:12px; }\n.review-panel { padding:10px 12px 4px; overflow:auto; }\n.review-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }\n.review-message { color:var(--muted); font-size:12px; line-height:1.5; margin:4px 0 10px; }\n.review-item { display:flex; gap:8px; padding:8px 0; border-top:1px solid var(--line); align-items:center; }\n.review-item[data-current] .review-name { font-weight:600; }\n.review-info { flex:1; min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:4px; }\n.review-name { width:100%; min-width:0; display:flex; justify-content:flex-start; gap:4px; text-align:left; padding:0; font-size:12px; }\n.review-page { flex-shrink:0; white-space:nowrap; }\n.review-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }\n.review-name:disabled { opacity:1; }\n.review-kind { display:inline-block; padding:1px 5px; border-radius:3px; background:var(--hover); font-size:10px; line-height:16px; color:var(--muted); }\n.review-item-actions { display:flex; flex-shrink:0; gap:2px; margin-left:auto; }\n.review-item-actions button { height:28px; padding:0 6px; font-size:12px; }\n.review-before { position:fixed; z-index:2147483643; overflow:hidden; background:var(--workspace); pointer-events:none; }\n.review-projection { position:absolute; overflow:hidden; pointer-events:none; }\n.review-projection iframe { position:absolute; left:0; top:0; border:0; transform-origin:top left; background:white; pointer-events:none; }\n.review-hint { position:fixed; right:16px; bottom:112px; pointer-events:none; z-index:2147483646; font-size:12px; color:var(--muted); background:var(--paper); padding:6px 10px; border-radius:6px; }\n\n/* Crop controls share the existing compact, neutral editor surface. */\n.crop-source{position:fixed;border:1px dashed #16a878;pointer-events:none;z-index:34;box-sizing:border-box;opacity:.75}\n.crop-panel{position:fixed;z-index:70;width:286px;max-width:calc(100vw - 16px);padding:14px;background:#fff;color:#222;border:1px solid #ddd;border-radius:12px;box-shadow:0 6px 24px #0002;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;box-sizing:border-box}\n.crop-heading,.crop-controls,.crop-actions{display:flex;align-items:center;gap:8px}.crop-heading{justify-content:space-between;margin-bottom:12px}.crop-heading span{font-size:12px;color:#777}.crop-controls input[type=range]{width:100%;min-width:40px;accent-color:#222}.crop-controls input[type=number]{width:52px;padding:5px;border:1px solid #ddd;border-radius:5px;font:inherit}.crop-actions{justify-content:flex-end;margin-top:12px}.crop-actions button{padding:6px 14px;border:0;border-radius:6px;background:#eee;color:#222;font:inherit;cursor:pointer}.crop-actions .primary{background:#222;color:#fff}\n.crop-controls label,.crop-controls>span{white-space:nowrap;flex:0 0 auto}.crop-controls input[type=range]{width:0;flex:1 1 auto}.crop-actions button:hover{filter:brightness(.95)}.crop-actions button:focus-visible,.crop-controls input:focus-visible{outline:2px solid #1683ff;outline-offset:2px}\n\n.help-dialog { align-items:center; justify-content:center; padding:24px; }\n.help-box { flex:initial; width:min(680px,100%); max-height:100%; }\n.help-box h2 { font-size:16px; margin:0; }\n.help-content { overflow:auto; min-height:0; padding:20px 24px; }\n.help-content:focus-visible { outline:2px solid var(--selection); outline-offset:-3px; }\n.help-note { color:#595959; margin:0 0 22px; line-height:1.7; }\n.help-note:last-child { margin:24px 0 0; }\n.help-section + .help-section { margin-top:24px; }\n.help-section h3 { font-size:13px; margin:0 0 8px; }\n.help-section dl { margin:0; }\n.help-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:16px; align-items:baseline; padding:7px 0; }\n.help-row dd { margin:0; }\n.help-row kbd { font:inherit; font-size:12px; color:#444; background:#f3f3f3; border-radius:4px; padding:3px 6px; white-space:nowrap; }\n@media (max-width:540px) {\n  .help-dialog { padding:12px; }\n  .help-content { padding:18px; }\n  .help-row { grid-template-columns:1fr; gap:5px; }\n}\n\n.page-size-dialog{position:fixed;inset:0;z-index:2147483647;background:#0005;display:grid;place-items:center;padding:16px;color:#202020;font:13px/1.5 system-ui,sans-serif}\n.size-box{width:min(360px,100%);box-sizing:border-box;background:#fff;border-radius:12px;padding:22px}\n.size-heading,.size-fields,.size-actions{display:flex;align-items:center;gap:12px}.size-heading h2{font-size:17px;margin:0;flex:1}.size-close{padding:0;width:28px}.size-page{color:#646464;margin:4px 0 20px}.size-box label{display:block;flex:1;min-width:0}.size-box select,.size-box input{box-sizing:border-box;width:100%;margin:6px 0 16px;padding:9px 10px;background:#f2f2f2;border:0;border-radius:6px;color:#202020;font:inherit}.size-fields label{position:relative}.size-fields input{padding-right:30px}.size-fields span{position:absolute;right:10px;top:35px;color:#646464}.size-note{font-size:12px;color:#646464;margin:0 0 20px}.size-error{font-size:12px;color:#b42318}.size-actions{justify-content:flex-end}.size-actions button{padding-inline:14px}.size-box :focus-visible{outline:2px solid #258bff;outline-offset:2px}\n.workspace-switch{flex-shrink:0;margin-inline:auto;background:#e8e8e8}.workspace-switch button{font-size:12px;padding:4px 9px;min-width:0}.workspace-switch [aria-pressed=true]{background:#fff;color:#202020}.workspace-label{position:fixed;height:24px;min-height:24px;justify-content:flex-start;padding:0;background:transparent;font-size:11px;color:#646464;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:auto}.workspace-label:hover{background:transparent;color:#202020}.workspace-ghost{position:fixed;inset:0;pointer-events:none;z-index:2147483641}.workspace-ghost *{pointer-events:none!important}.workspace-labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}\n@media(max-width:760px){:host([data-workspace-enabled]) .page-title{display:none}:host([data-workspace-enabled]) .footer{gap:2px}:host([data-workspace-enabled]) .workspace-switch button{padding-inline:6px;font-size:11px}}\n\n.arrow-end {\n  position: fixed;\n  z-index: 2147483645;\n  width: 11px;\n  height: 11px;\n  border: 1px solid var(--selection);\n  border-radius: 50%;\n  background: #fff;\n  box-shadow: 0 0 0 1px #ffffff80;\n  transform: translate(-50%, -50%);\n  cursor: crosshair;\n  pointer-events: auto;\n}\n.arrow-preview, .arrow-preview * {\n  pointer-events: none !important;\n}\n.arrow-preview {\n  z-index: 2147483643;\n}\n\n.arrow-bend { border-radius: 2px; transform: translate(-50%, -50%) rotate(45deg); }\n';
 
   // node_modules/lucide/dist/esm/icons/arrow-down.mjs
   var ArrowDown = [
@@ -2728,6 +2794,7 @@ property of their respective owners.
   <section class="crop-panel" aria-label="图片裁切" hidden><div class="crop-heading"><strong>裁切</strong><span>拖动图片调整取景</span></div><div class="crop-controls"><label for="crop-zoom">缩放</label><input id="crop-zoom" class="crop-zoom" aria-label="裁切缩放" type="range" min="100" max="500" step="1"><input class="crop-zoom-value" aria-label="裁切缩放百分比" type="number" min="100" max="2000" step="1"><span>%</span></div><div class="crop-actions"><button data-act="crop-cancel">取消</button><button class="primary" data-act="crop-done">完成</button></div></section>
   <div class="sel">${HANDLES.map((h) => `<i data-h="${h}" title="${h.length === 2 ? "拖动缩放（文字角点同步缩放字号）" : "调整边界，不改变字号"}"></i>`).join("")}</div>
   <div class="arrow-end" data-arrow-end="0" title="拖动箭尾" hidden></div><div class="arrow-end" data-arrow-end="1" title="拖动箭头" hidden></div>
+  <div class="arrow-end arrow-bend" data-arrow-bend title="拖动折线中段" hidden></div>
   <button type="button" class="rotate-handle" aria-label="旋转选中元素" title="拖动旋转；Shift 15°步进，Alt 自由旋转" hidden>${icon("RotateCwSquare")}</button><output class="rotation-feedback" aria-live="off" hidden></output>
   <div class="menu-panel rotation-panel" data-menu="rotation" role="dialog" aria-label="旋转" hidden><div class="rotation-single"><label>角度 <input type="number" class="rotation-angle" step="1" aria-label="旋转角度"><span>°</span></label>${button("rotation-reset", "RotateCwSquare", "重置旋转为0°", { text: "重置为 0°" })}</div><p class="rotation-multiple" hidden>拖动旋转手柄，以整体中心旋转。</p></div>
   <div class="menu-panel text-layout-panel" data-menu="text-layout" role="menu" hidden><strong>文字适配</strong><p class="text-layout-status" role="status" aria-live="polite"></p>${button("text-height", "TextCursorInput", "保持字号，按内容调整文本框高度", { text: "高度随内容" })}${button("text-fit", "Type", "保持文本框，缩小字号以完整显示（最小 6px）", { text: "缩小字号适配" })}</div>
@@ -2740,7 +2807,7 @@ property of their respective owners.
     ${button("download", "Download", "下载 HTML", { text: "下载 HTML" })}${button("copy", "Copy", "复制 HTML", { text: "复制 HTML" })}${button("print", "Printer", "浏览器打印 / PDF", { text: "打印" })}
   </div>
   <div class="menu-panel" data-menu="more" role="menu" hidden>${button("source", "Code", "查看或修改源码", { text: "源码" })}${button("save", "Save", `立即保存 (${keys.save})`, { text: "立即保存" })}<div class="menu-separator"></div>${button("help", "TextCursorInput", "快捷键与使用帮助", { text: "快捷键与帮助" })}</div>
-  <div class="menu-panel" data-menu="element" role="menu" hidden><div class="shape-more-section" hidden><label class="shape-adjust">形状调整 <input type="range" min="0" max="50" step="1" data-shape-prop="adjust" aria-label="形状调整"></label><div class="menu-separator"></div></div><div class="more-text-section" hidden><div class="more-text-formats" role="group" aria-label="更多文字格式">${fmt("italic", "Italic", "斜体")}${fmt("underline", "Underline", "下划线")}${fmt("strikeThrough", "Strikethrough", "删除线")}</div>${button("text-layout", "TextCursorInput", "文字适配：检测溢出、调整高度和字号", { text: "文字适配", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}<button data-fmt="removeFormat">${icon("Type")}清除文字格式</button><div class="menu-separator"></div></div>${button("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${button("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${button("group-enter", "MousePointer2", "进入组合", { text: "进入组合", attrs: "hidden" })}${button("group-exit", "ChevronLeft", "返回上层组合", { text: "返回上层", attrs: "hidden" })}${button("select-all", "MousePointer2", `全选当前页或组合 (${keys["select-all"]})`, { text: "全选" })}${button("element-copy", "Copy", `复制 (${keys["object-copy"]})`, { text: "复制" })}${button("element-cut", "Scissors", `剪切 (${keys["object-cut"]})`, { text: "剪切" })}${button("element-duplicate", "CopyPlus", `就地复制 (${keys["element-duplicate"]})`, { text: "就地复制" })}${button("element-front", "BringToFront", "置于顶层", { text: "置于顶层" })}${button("element-back", "SendToBack", "置于底层", { text: "置于底层" })}${button("element-delete", "Trash2", "删除元素 (Delete)", { text: "删除元素" })}</div>
+  <div class="menu-panel" data-menu="element" role="menu" hidden><div class="arrow-parameter-section" hidden><div class="arrow-parameter-fields"></div><button type="button" data-act="arrow-reset-bend" hidden>恢复自动居中</button><div class="menu-separator"></div></div><div class="shape-more-section" hidden><label class="shape-adjust">形状调整 <input type="range" min="0" max="50" step="1" data-shape-prop="adjust" aria-label="形状调整"></label><div class="menu-separator"></div></div><div class="more-text-section" hidden><div class="more-text-formats" role="group" aria-label="更多文字格式">${fmt("italic", "Italic", "斜体")}${fmt("underline", "Underline", "下划线")}${fmt("strikeThrough", "Strikethrough", "删除线")}</div>${button("text-layout", "TextCursorInput", "文字适配：检测溢出、调整高度和字号", { text: "文字适配", attrs: 'aria-expanded="false" aria-haspopup="menu"' })}<button data-fmt="removeFormat">${icon("Type")}清除文字格式</button><div class="menu-separator"></div></div>${button("group", "Group", `组合 (${keys.group})`, { text: "组合", attrs: "hidden" })}${button("ungroup", "Ungroup", `取消组合 (${keys.ungroup})`, { text: "取消组合", attrs: "hidden" })}${button("group-enter", "MousePointer2", "进入组合", { text: "进入组合", attrs: "hidden" })}${button("group-exit", "ChevronLeft", "返回上层组合", { text: "返回上层", attrs: "hidden" })}${button("select-all", "MousePointer2", `全选当前页或组合 (${keys["select-all"]})`, { text: "全选" })}${button("element-copy", "Copy", `复制 (${keys["object-copy"]})`, { text: "复制" })}${button("element-cut", "Scissors", `剪切 (${keys["object-cut"]})`, { text: "剪切" })}${button("element-duplicate", "CopyPlus", `就地复制 (${keys["element-duplicate"]})`, { text: "就地复制" })}${button("element-front", "BringToFront", "置于顶层", { text: "置于顶层" })}${button("element-back", "SendToBack", "置于底层", { text: "置于底层" })}${button("element-delete", "Trash2", "删除元素 (Delete)", { text: "删除元素" })}</div>
   <div class="menu-panel" data-menu="page" role="menu" hidden>${button("page-add", "Plus", "在此后新增页面", { text: "新增页面" })}${button("page-copy", "Copy", "复制页面", { text: "复制页面" })}${button("page-rename", "TextCursorInput", "重命名页面", { text: "重命名" })}${button("page-size", "Maximize", "修改当前画布尺寸", { text: "画布尺寸" })}<div class="menu-separator"></div>${button("page-up", "ArrowUp", "上移页面", { text: "上移" })}${button("page-down", "ArrowDown", "下移页面", { text: "下移" })}<div class="menu-separator"></div>${button("page-delete", "Trash2", "删除页面", { text: "删除页面" })}</div>
   <div class="menu-panel status-panel" data-menu="status" role="menu" hidden><p class="status-detail"></p>${button("retry", "RefreshCw", "重试保存", { text: "重试", attrs: "hidden" })}${button("recover", "RefreshCw", "恢复未保存草稿", { text: "恢复草稿", attrs: "hidden" })}${button("conflict", "Download", "下载当前副本并同步最新文件", { text: "下载副本并同步", attrs: "hidden" })}</div>
   <div class="empty-canvas" hidden>${icon("Presentation")}<p>从第一页开始</p>${button("page-add", "Plus", "新增页面", { text: "新增页面", cls: "primary" })}</div>
@@ -9863,11 +9930,19 @@ property of their respective owners.
         drawSel();
         syncBar();
       }
-      const arrowHandles = [...ui.querySelectorAll("[data-arrow-end]")];
+      const arrowHandles = [...ui.querySelectorAll("[data-arrow-end]")], bendHandle = $("[data-arrow-bend]");
       function arrowPoint(el, point) {
         return new DOMPoint(point.x, point.y).matrixTransform(el.getScreenCTM());
       }
       function drawArrowHandles(el, points) {
+        const bend = arrowBendHandle(el, points);
+        bendHandle.hidden = !bend || !S.editing || S.playing;
+        if (!bendHandle.hidden) {
+          const { x, y } = arrowPoint(el, bend);
+          Object.assign(bendHandle.style, { left: `${x}px`, top: `${y}px` });
+          const axes = elementGeometry(el);
+          bendHandle.style.cursor = resizeCursor(bend.axis === "x" ? "e" : "s", axes.angle);
+        }
         arrowHandles.forEach((handle, index) => {
           handle.hidden = !points || !S.editing || S.playing;
           if (handle.hidden) return;
@@ -9903,7 +9978,10 @@ property of their respective owners.
           selBox.classList.toggle("typing", !!S.text);
           selBox.classList.toggle("multiple", S.selection.length > 1);
           selBox.classList.toggle("group", S.selection.length === 1 && isGroup(el));
-          selBox.classList.toggle("arrow-length", S.selection.length === 1 && arrowResizeMode(el) === "length");
+          const arrowMode = S.selection.length === 1 && arrowResizeMode(el);
+          selBox.classList.toggle("arrow-shaft", arrowMode === "shaft");
+          selBox.classList.toggle("arrow-corners", arrowMode === "uniform");
+          selBox.classList.toggle("arrow-width", arrowMode === "width");
           selBox.classList.toggle("text-box", S.selection.length === 1 && isTextObject(el));
         }
         positionRotation();
@@ -10034,7 +10112,8 @@ property of their respective owners.
         const media = el.matches(MEDIA), text = isTextObject(el);
         const metrics = text && dir.length === 2 ? textMetrics(el) : null;
         const before = snap(metrics ? metrics.map((m) => m.node) : cropImage(el) && el !== cropImage(el) ? [el, cropImage(el)] : [el], el.matches("svg[data-shape]"));
-        const arrowMode = arrowResizeMode(el), initialArrowScale = arrowMode === "uniform" && arrowScale(el);
+        const arrowMode = arrowResizeMode(el), arrowParameters = arrowMode && readArrowParameters(el);
+        const anchorDir = arrowMode === "shaft" && dir === "se" ? "w" : dir;
         const hp = media || el.style.height || text && dir === "s" ? "height" : "minHeight";
         const x0 = e.clientX, y0 = e.clientY;
         let g = initial, p = getPos(el), anchor, moved = false;
@@ -10045,7 +10124,7 @@ property of their respective owners.
               prepareTransform(el, initial, p);
               g = elementGeometry(el);
               p = getPos(el);
-              anchor = resizeAnchor(g, dir);
+              anchor = resizeAnchor(g, anchorDir);
               moved = true;
             }
             const { x: dx, y: dy } = inverseDelta(g.matrix, ev.clientX - x0, ev.clientY - y0);
@@ -10055,13 +10134,15 @@ property of their respective owners.
             if (dir.includes("w")) w -= dx;
             if (dir.includes("s")) h += dy;
             if (dir.includes("n")) h -= dy;
+            el.style.boxSizing = "border-box";
+            el.style.maxWidth = "none";
             if (arrowMode) {
-              if (arrowMode === "uniform" && dir.length === 2) {
+              if (arrowMode !== "shaft" && dir.length === 2) {
                 const k = (w * w0 + h * h0) / (w0 * w0 + h0 * h0);
                 w = w0 * k;
                 h = h0 * k;
               }
-              ({ w, h } = resizeArrowShape(el, w, h, g, arrowMode, initialArrowScale));
+              resizeArrowShape(el, w, h, g, arrowMode, dir, arrowParameters);
             } else if (metrics) {
               const sx = dir.includes("w") ? -1 : 1, sy = dir.includes("n") ? -1 : 1;
               const k = Math.max(
@@ -10078,24 +10159,24 @@ property of their respective owners.
               w = w0 * k;
               h = h0 * k;
             }
-            el.style.boxSizing = "border-box";
-            el.style.maxWidth = "none";
-            if (text && dir === "s") {
-              el.style.minHeight = "0px";
-              el.style.maxHeight = "none";
+            if (!arrowMode) {
+              if (text && dir === "s") {
+                el.style.minHeight = "0px";
+                el.style.maxHeight = "none";
+              }
+              if (dir !== "n" && dir !== "s") el.style.width = Math.round(Math.max(8, w) * 1e3) / 1e3 + "px";
+              if (dir !== "e" && dir !== "w") {
+                el.style[hp] = Math.round(Math.max(8, h) * 1e3) / 1e3 + "px";
+                if (el.matches("[data-crop-frame]")) cropImage(el).style.setProperty("height", "100%", "important");
+              }
+              if (text && dir.length === 1 && el.scrollHeight > el.clientHeight + 1) {
+                el.style.height = "auto";
+                el.style.blockSize = "auto";
+              }
+              if (el.matches("svg[data-shape]")) renderShape(el, { width: Math.max(8, w), height: Math.max(8, h) });
             }
-            if (arrowMode || dir !== "n" && dir !== "s") el.style.width = Math.round(Math.max(8, w) * 1e3) / 1e3 + "px";
-            if (arrowMode || dir !== "e" && dir !== "w") {
-              el.style[hp] = Math.round(Math.max(8, h) * 1e3) / 1e3 + "px";
-              if (el.matches("[data-crop-frame]")) cropImage(el).style.setProperty("height", "100%", "important");
-            }
-            if (text && dir.length === 1 && el.scrollHeight > el.clientHeight + 1) {
-              el.style.height = "auto";
-              el.style.blockSize = "auto";
-            }
-            if (el.matches("svg[data-shape]")) renderShape(el, { width: Math.max(8, w), height: Math.max(8, h) });
             setPos(el, p, p.x, p.y);
-            const now = elementGeometry(el), current = resizeAnchor(now, dir);
+            const now = elementGeometry(el), current = resizeAnchor(now, anchorDir);
             const d = inverseDelta(now.parent, anchor.x - current.x, anchor.y - current.y);
             setPos(el, p, p.x + d.x, p.y + d.y);
             drawSel();
@@ -10604,6 +10685,32 @@ property of their respective owners.
           }
         };
       }
+      function startArrowBend(e) {
+        const el = S.sel, points = readLineArrow(el), handle = arrowBendHandle(el, points);
+        if (e.button !== 0 || S.selection.length !== 1 || !handle || !canMutate()) return;
+        const local = el.getScreenCTM().inverse(), axis = handle.axis;
+        const bendAxis = axis === "x" ? "vertical" : "horizontal";
+        const before = snap([el], true), board = el.closest("[data-artboard]");
+        const shift = new DOMPoint(e.clientX, e.clientY).matrixTransform(local)[axis] - handle[axis];
+        let moved = false;
+        S.drag = {
+          move(event) {
+            if (event.pointerId !== e.pointerId || !moved && Math.hypot(event.clientX - e.clientX, event.clientY - e.clientY) < 3) return;
+            const target = new DOMPoint(event.clientX, event.clientY).matrixTransform(local)[axis] - shift;
+            const bend = (target - points[0][axis]) / (points[1][axis] - points[0][axis]);
+            setArrowParameters(el, { bend: Math.round(bend * 1e3) / 1e3, bendAxis });
+            moved = true;
+            drawSel();
+          },
+          up() {
+            if (moved) commit(before, board);
+          },
+          cancel() {
+            apply(before);
+            drawSel();
+          }
+        };
+      }
       function addShape(kind) {
         const b = activeBoard();
         if (!b || !visible(b) || !persistence?.canEdit()) return;
@@ -10878,9 +10985,10 @@ property of their respective owners.
         const shape = !multi && el.matches("svg[data-shape]");
         $(".shape-tools").hidden = !shape;
         $(".shape-more-section").hidden = !shape || !shapeHasAdjust(el.dataset.shape) || isArrowShape(el) || !!readLineArrow(el);
+        syncArrowMenu(shape ? el : null);
         if (shape) {
           for (const [prop, value] of Object.entries({ fill: el.dataset.shapeFill, stroke: el.dataset.shapeStroke, width: el.dataset.shapeWidth, adjust: el.dataset.shapeAdjust, radius: el.dataset.shapeRadius ?? (el.dataset.shape === "rect" ? el.dataset.shapeAdjust : "0") })) {
-            const input = $(`[data-shape-prop=${prop}]`);
+            const input = $(`.shape-tools [data-shape-prop=${prop}]`) || $(`.shape-more-section [data-shape-prop=${prop}]`);
             if (ui.activeElement !== input) input.value = value;
           }
           $(".shape-fill-color").hidden = el.hasAttribute("data-shape-arrow") ? !arrowHasFill(el) : !shapeHasFill(el.dataset.shape);
@@ -11045,7 +11153,7 @@ property of their respective owners.
           const controlKey = e.ctrlKey || e.metaKey, localShortcut = controlKey && ["g", "a"].includes(e.key.toLowerCase()), zoomKey = controlKey && ["=", "+", "-", "_", "0", "1"].includes(e.key);
           if (e.composedPath().some(
             (n) => n instanceof Element && n.matches("input,textarea,select,[contenteditable]:not([contenteditable=false])")
-          ) && !zoomKey && !(e.key === "Escape" && S.text && e.composedPath().includes(S.text.el)) && !(controlKey && (e.key.toLowerCase() === "s" || ["z", "y"].includes(e.key.toLowerCase()) && e.composedPath().some((n) => n instanceof Element && n.hasAttribute("data-shape-prop")))))
+          ) && !zoomKey && !(e.key === "Escape" && S.text && e.composedPath().includes(S.text.el)) && !(controlKey && (e.key.toLowerCase() === "s" || ["z", "y"].includes(e.key.toLowerCase()) && e.composedPath().some((n) => n instanceof Element && n.matches("[data-shape-prop],[data-arrow-param]")))))
             return;
           if (!modal.hidden && !zoomKey && !(controlKey && e.key.toLowerCase() === "s") && e.key !== "Escape") return;
           if (localShortcut && (crop.active || !modal.hidden || ui.querySelector("[data-menu]:not([hidden])") || ui.activeElement?.closest(".thumb"))) return;
@@ -11305,6 +11413,11 @@ property of their respective owners.
         if (e.target.closest("button")) e.preventDefault();
       });
       ui.addEventListener("pointerdown", (e) => {
+        if (e.target.closest?.("[data-arrow-bend]")) {
+          e.preventDefault();
+          startArrowBend(e);
+          return;
+        }
         const endpoint = e.target.closest?.("[data-arrow-end]");
         if (endpoint) {
           e.preventDefault();
@@ -11571,6 +11684,15 @@ property of their respective owners.
         },
         "add-shape": (btn) => openMenu("shape", btn),
         "shape-insert": (btn) => addShape(btn.dataset.shapeKind),
+        "arrow-reset-bend": () => {
+          const el = S.sel;
+          if (!readLineArrow(el)) return;
+          const before = snap([el], true);
+          setArrowParameters(el, { bend: 0.5, bendAxis: "auto" });
+          commit(before, el.closest("[data-artboard]"));
+          drawSel();
+          syncArrowMenu(el);
+        },
         "shape-width-up": () => stepShapeWidth(1),
         "shape-width-down": () => stepShapeWidth(-1),
         "font-size-up": () => stepFontSize(1),
@@ -11707,7 +11829,8 @@ property of their respective owners.
         "element-delete",
         "element-front",
         "element-back",
-        "rotation-reset"
+        "rotation-reset",
+        "arrow-reset-bend"
       ]);
       function canMutate() {
         return S.editing && !S.playing && !!persistence?.canEdit();
@@ -11749,29 +11872,61 @@ property of their respective owners.
         }
         const act = btn.dataset.act;
         if (!act) return;
+        if (act === "arrow-reset-bend" && ui.activeElement?.hasAttribute("data-arrow-param"))
+          ui.activeElement.blur();
         if (!["preview", "export", "more", "status", "element-more", "text-layout", "rotation", "add-shape", "add-text", "text-color", "shape-fill-color", "shape-stroke-color"].includes(act))
           closeMenus();
         runAction(act, btn);
       });
+      function syncArrowMenu(el) {
+        const params = arrowMenuParameters(el), panel = $(".arrow-parameter-section");
+        panel.hidden = !params.length;
+        const entries = panel.querySelector(".arrow-parameter-fields");
+        const keys = params.map((p) => p.name).join(" ");
+        if (entries.dataset.fields !== keys) {
+          entries.dataset.fields = keys;
+          entries.innerHTML = params.map(
+            ({ name, label }) => `<label>${label}<input type="number" data-arrow-param="${name}" aria-label="${label}"></label>`
+          ).join("");
+        }
+        panel.querySelector("[data-act=arrow-reset-bend]").hidden = !params.some((p) => p.name === "bend");
+        params.forEach(({ name, min, max, step, value }) => {
+          const input = entries.querySelector(`[data-arrow-param="${name}"]`);
+          Object.assign(input, { min, max, step });
+          if (ui.activeElement !== input) input.value = value;
+        });
+      }
       const shapePending = /* @__PURE__ */ new Map();
       function previewShapeParam(input) {
-        const prop = input.dataset?.shapeProp;
+        const prop = input.dataset?.arrowParam || input.dataset?.shapeProp;
         const el = S.sel;
         if (!prop || !el?.matches("svg[data-shape]") || !S.editing || !persistence?.canEdit()) return;
+        const arrow = isArrowShape(el) || readLineArrow(el);
+        const menuParam = input.hasAttribute("data-arrow-param");
         const field = { fill: "shapeFill", stroke: "shapeStroke", width: "shapeWidth", adjust: "shapeAdjust", radius: "shapeRadius" }[prop];
-        if (!field) return;
-        if (["width", "adjust", "radius"].includes(prop) && !Number.isFinite(input.valueAsNumber)) return;
+        if (menuParam ? !arrow || !arrowMenuParameters(el).some((p) => p.name === prop) : !field) return;
+        const isColor = prop === "fill" || prop === "stroke";
+        if (!isColor && !Number.isFinite(input.valueAsNumber)) return;
         const pending = shapePending.get(input);
         const fresh = !pending || pending.el !== el;
         if (fresh) shapePending.set(input, { el, before: snap([el], true) });
-        el.dataset[field] = input.value;
-        if (prop === "stroke" && Number(el.dataset.shapeWidth) === 0) {
-          el.dataset.shapeWidth = "2";
-          $("[data-shape-prop=width]").value = "2";
+        if (arrow) {
+          const value = prop === "bend" ? input.valueAsNumber / 100 : isColor ? input.value : input.valueAsNumber;
+          const changes = { [prop === "width" ? "strokeWidth" : prop]: value };
+          if (prop === "stroke" && Number(el.dataset.shapeWidth) === 0) changes.strokeWidth = 2;
+          setArrowParameters(el, changes);
+          drawSel();
+          syncTbar();
+        } else {
+          el.dataset[field] = input.value;
+          if (prop === "stroke" && Number(el.dataset.shapeWidth) === 0) {
+            el.dataset.shapeWidth = "2";
+            $("[data-shape-prop=width]").value = "2";
+          }
+          if (prop === "fill") $(".shape-fill-color .shape-swatch").style.background = input.value;
+          if (prop === "stroke") $(".shape-stroke-color .shape-swatch").style.borderColor = input.value;
+          renderShape(el);
         }
-        if (prop === "fill") $(".shape-fill-color .shape-swatch").style.background = input.value;
-        if (prop === "stroke") $(".shape-stroke-color .shape-swatch").style.borderColor = input.value;
-        renderShape(el);
         if (fresh) persistence?.markDirty();
       }
       function finishShapeParam(input) {
@@ -11780,6 +11935,7 @@ property of their respective owners.
         shapePending.delete(input);
         if (pending.el.isConnected) commit(pending.before, pending.el.closest("[data-artboard]"));
         drawSel();
+        if (pending.el === S.sel) syncArrowMenu(S.sel);
       }
       function finishAllShapeParams() {
         for (const input of [...shapePending.keys()]) finishShapeParam(input);
@@ -11793,12 +11949,12 @@ property of their respective owners.
       }
       ui.addEventListener("input", (e) => previewShapeParam(e.target));
       ui.addEventListener("change", (e) => {
-        if (!e.target.dataset?.shapeProp) return;
+        if (!(e.target.dataset?.shapeProp || e.target.dataset?.arrowParam)) return;
         previewShapeParam(e.target);
         finishShapeParam(e.target);
       });
       ui.addEventListener("focusout", (e) => {
-        if (e.target.dataset?.shapeProp) finishShapeParam(e.target);
+        if (e.target.dataset?.shapeProp || e.target.dataset?.arrowParam) finishShapeParam(e.target);
       });
       ui.addEventListener("keydown", (e) => {
         if (e.target.matches(".rotation-angle")) return;
