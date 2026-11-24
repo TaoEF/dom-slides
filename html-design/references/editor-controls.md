@@ -77,7 +77,7 @@ const arrow = arrowShapeMarkup({ id: 'p1-next', kind: 'doubleChevron',
 
 连接线预设为 `line`、`arrow`、`arrowDouble`、`arrowElbow`。坐标是定位画板 padding box 的设计像素，画板须建立绝对定位参照。箭头形状预设为 `triangleHead`、`chevron`、`thinArrow`、`notched`、`doubleChevron`、`blockArrow`。
 
-两种入口共用 `head`（`none`、`open`、`triangle`、`notched`、`ribbon`）、`heads`（`none`、`end`、`both`）、`shaft`、`strokeWidth`、`shaftWidth`、`headLength`、`headWidth`、`radius`、`repeat`（1 或 2）、`gap`、`fill`、`stroke`。连接线还可指定 `route`（`straight` 或 `elbow`），箭头形状可指定总宽 `width`。折线半径控制路径转角，独立箭头形状半径控制轮廓拐点。参数和 SVG 子节点一起保存。
+两种入口共用 `head`（`none`、`open`、`triangle`、`notched`、`ribbon`）、`heads`（`none`、`end`、`both`）、`shaft`、`strokeWidth`、`shaftWidth`、`headLength`、`headWidth`、`radius`、`repeat`（1 或 2）、`gap`、`fill`、`stroke`。连接线还可指定 `route`（`straight` 或 `elbow`），箭头形状可指定总宽 `width`。无箭身双头同时指定总宽和间距时，以总宽计算并保存实际间距。折线半径控制路径转角，独立箭头形状半径控制轮廓拐点。参数和 SVG 子节点一起保存。
 
 ## 保存、审阅与导出
 

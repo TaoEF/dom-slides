@@ -542,3 +542,24 @@ test('dragging an elbow endpoint recalculates its route and keeps the other endp
     assert.equal(await ink.getAttribute('d'),before);
   } finally { await p.close(); }
 });
+
+test('stretching repeated heads writes the gap and permits shrinking in a second gesture', async () => {
+  const p=await browser.newPage({viewport:{width:1440,height:900}});
+  try {
+    await p.setContent(shell(arrowShapeMarkup({id:'heads',kind:'doubleChevron',gap:18})));
+    await p.addScriptTag({content:editor});
+    await p.locator('[data-act=edit]').click();
+    const heads=p.locator('[data-el=heads]');
+    await heads.click();
+    const stretch=async delta => {
+      const b=await p.locator('[data-h=e]').boundingBox(), from={x:b.x+b.width/2,y:b.y+b.height/2};
+      await drag(p,from,{x:from.x+delta,y:from.y});
+    };
+    await stretch(100);
+    assert.ok(Number(await heads.getAttribute('data-shape-gap'))>18);
+    await stretch(-170);
+    assert.equal(await heads.getAttribute('data-shape-gap'),'0');
+    await p.locator('[data-act=undo]').click();
+    assert.ok(Number(await heads.getAttribute('data-shape-gap'))>18);
+  } finally { await p.close(); }
+});

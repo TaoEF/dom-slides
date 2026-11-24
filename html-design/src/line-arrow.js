@@ -44,7 +44,7 @@ function model(kind, options = {}) {
     headWidth: param(options.headWidth, p.headWidth, 4, 400),
     radius: param(options.radius, p.radius, 0, 50),
     repeat: Math.round(param(options.repeat, p.repeat, 1, 2)),
-    gap: param(options.gap, p.gap, 0, 400),
+    gap: param(options.gap, p.gap, 0, 5000),
     scale: param(options.scale, p.scale, .01, 40),
     fill: color(options.fill), stroke: color(options.stroke),
   };
@@ -160,25 +160,35 @@ function sizing(p) {
   return { head: p.headLength * p.scale, pad: p.strokeWidth * p.scale / 2,
     natural: p.headLength * p.scale * p.repeat + p.gap * (p.repeat - 1) + p.strokeWidth * p.scale };
 }
+const repeatsWithoutShaft = p => !p.shaft && p.repeat === 2;
+function minimumArrowWidth(p) {
+  return sizing(p).natural - (repeatsWithoutShaft(p) ? p.gap : 0);
+}
+function shapeWithWidth(p, width) {
+  if (repeatsWithoutShaft(p)) p.gap = number(Math.max(0, width - minimumArrowWidth(p)));
+  return p;
+}
 function shapeGeometry(p,w,h) {
-  const {head,pad,natural} = sizing(p);
-  const gap = !p.shaft && p.repeat === 2 ? Math.max(0, w - 2*head - 2*pad) : p.gap;
+  const {pad,natural} = sizing(p);
   const y = h / 2, to = !p.shaft && p.repeat === 1 ? (w + natural)/2 - pad : w - pad;
-  return geometry({...p,gap,strokeWidth:p.strokeWidth*p.scale}, {x:pad,y}, {x:to,y}, false);
+  return geometry({...p,strokeWidth:p.strokeWidth*p.scale}, {x:pad,y}, {x:to,y}, false);
 }
 export function arrowShapeMarkup({id,kind,...options}) {
   if (!id || !arrowShapeKinds.includes(kind)) throw new Error('arrowShapeMarkup requires an id and arrow shape kind');
   const p = model(kind, options), {natural} = sizing(p);
-  const w = param(options.width, presets[kind].width ?? natural, natural, 5000);
+  const w = param(options.width, presets[kind].width ?? natural, minimumArrowWidth(p), 5000);
+  shapeWithWidth(p,w);
   const h = p.headWidth*p.scale + p.strokeWidth*p.scale;
   return `${startView(kind,id,p,w,h)} style="width:${w}px;height:${h}px;display:block;overflow:visible">${shapeGeometry(p,w,h)}</svg>`;
 }
 export function renderArrowShape(el,w,h) {
+  const p = shapeWithWidth(readModel(el),w);
   el.setAttribute('viewBox',view(w,h));
-  el.innerHTML=shapeGeometry(readModel(el),w,h);
+  if (repeatsWithoutShaft(p)) el.dataset.shapeGap = String(p.gap);
+  el.innerHTML=shapeGeometry(p,w,h);
 }
 export function resizeArrowShape(el,w,h,initial,mode,scale) {
-  if (mode === 'length') return {w:Math.max(sizing(readModel(el)).natural,w),h:initial.h};
+  if (mode === 'length') return {w:Math.max(minimumArrowWidth(readModel(el)),w),h:initial.h};
   const k = Math.max(.1,w === initial.w ? h/initial.h : w/initial.w,8/initial.w,8/initial.h);
   el.dataset.shapeArrowScale = String(k*scale);
   return {w:initial.w*k,h:initial.h*k};
