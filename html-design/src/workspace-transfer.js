@@ -1,6 +1,6 @@
 import { elementGeometry } from "./geometry.js";
-import { isGroup, groupRoots, stableGroupMarkup } from "./groups.js";
-import { selectionRoots, unionRect } from "./selection.js";
+import { isGroup, groupRoots, objectRect, stableGroupMarkup } from "./groups.js";
+import { selectable, selectionRoots, unionRect } from "./selection.js";
 import { selectionFrame, writeGroupAngle } from "./oriented-selection.js";
 import { rekeyDOMIds } from "./identifiers.js";
 
@@ -24,6 +24,82 @@ export function createWorkspaceTransfer({
 }) {
   const enabled = stage.hasAttribute("data-workspace-prototype");
   let ghost = null;
+  // Standalone unsaved pages can share the same about:blank URL.
+  const documentKey = location.protocol === 'about:' ? String(Math.random()) : location.pathname;
+
+  function boardOrigin(board, zoom) {
+    const r = board.getBoundingClientRect();
+    return {x: r.left - board.scrollLeft * zoom, y: r.top - board.scrollTop * zoom};
+  }
+
+  function samePageCenter(board, packet, center, area) {
+    const k = S.zoom / packet.zoom, gap = 16 * S.zoom;
+    const roots = packet.objects.flatMap(object => object.frames.slice(0, 1));
+    // Semantic groups have no outer box. Use their visible member frames too.
+    const frames = roots.some(r => !r.w && !r.h)
+      ? packet.objects.flatMap(object => object.frames.filter(r => r.w && r.h)) : roots;
+    const left = Math.min(...frames.map(r => r.cx - r.w / 2));
+    const right = Math.max(...frames.map(r => r.cx + r.w / 2));
+    const top = Math.min(...frames.map(r => r.cy - r.h / 2));
+    const bottom = Math.max(...frames.map(r => r.cy + r.h / 2));
+    const w = (right - left) * k, h = (bottom - top) * k;
+    const x = center.x + (left - packet.cx) * k, y = center.y + (top - packet.cy) * k;
+    const occupied = selectable(board).map(objectRect).sort((a, b) => a.left - b.left);
+    const maxX = Math.max(area.left, area.right - w), maxY = Math.max(area.top, area.bottom - h);
+    const clamp = (n, min, max) => Math.max(min, Math.min(n, max));
+    const overlap = (left, top) => occupied.reduce((total, r) => total +
+      Math.max(0, Math.min(left + w, r.right) - Math.max(left, r.left)) *
+      Math.max(0, Math.min(top + h, r.bottom) - Math.max(top, r.top)), 0);
+    let best = null;
+    function consider(left, top, clear = false) {
+      left = clamp(left, area.left, maxX);
+      top = clamp(top, area.top, maxY);
+      const distance = Math.hypot(left - x, top - y);
+      if (distance < .5 || (best?.score === 0 && distance >= best.distance)) return;
+      const score = clear ? 0 : overlap(left, top);
+      if (!best || score < best.score || (score === best.score && distance < best.distance))
+        best = {left, top, score, distance};
+    }
+
+    consider(x + gap, y + gap);
+    if (w <= area.width && h <= area.height) {
+      // Moving past an object's top/bottom is the only point at which a
+      // horizontal gap opens or closes. Scan those rows for the nearest gap.
+      const rows = new Set([y, area.top, maxY, ...occupied.flatMap(r => [r.top - h, r.bottom])]
+        .map(top => clamp(top, area.top, maxY)));
+      for (const top of rows) {
+        let start = area.left;
+        for (const r of occupied) {
+          if (r.top >= top + h || r.bottom <= top) continue;
+          const end = Math.min(r.left - w, maxX);
+          if (start <= end) consider(clamp(x, start, end), top, true);
+          start = Math.max(start, r.right);
+          if (start > maxX) break;
+        }
+        if (start <= maxX) consider(clamp(x, start, maxX), top, true);
+      }
+    }
+    if (best?.score !== 0) {
+      // A packed page can have no vacancy. Prefer the least-overlapping
+      // nearby shift while keeping the pasted selection together.
+      for (const r of [...occupied, area]) {
+        consider(r.left - w, y);
+        consider(r.right, y);
+        consider(x, r.top - h);
+        consider(x, r.bottom);
+      }
+    }
+    return best ? {x: center.x + best.left - x, y: center.y + best.top - y} : center;
+  }
+
+  function pasteCenter(board, packet) {
+    const area = board.getBoundingClientRect();
+    if (!packet.source) return {x: area.left + area.width / 2, y: area.top + area.height / 2};
+    const origin = boardOrigin(board, S.zoom);
+    const center = {x: origin.x + packet.source.x * S.zoom, y: origin.y + packet.source.y * S.zoom};
+    return packet.source.document === documentKey && packet.source.page === board.dataset.artboard
+      ? samePageCenter(board, packet, center, area) : center;
+  }
   const all = (roots) => [
     ...new Set(roots.flatMap((n) => [n, ...n.querySelectorAll("*")])),
   ];
@@ -213,7 +289,7 @@ export function createWorkspaceTransfer({
     };
   }
   function position(node, g, board, cx, cy, zoom, autoTextHeight = false) {
-    const r = board.getBoundingClientRect(),
+    const origin = boardOrigin(board, S.zoom),
       cs = getComputedStyle(board),
       scale = g.scale / zoom;
     const set = (key, value) =>
@@ -235,8 +311,8 @@ export function createWorkspaceTransfer({
       zoom: "1",
       "transform-origin": "50% 50%",
       transform: `rotate(${g.angle}deg) scale(${scale})`,
-      left: `${(cx - r.left) / S.zoom - (parseFloat(cs.borderLeftWidth) || 0) - g.w / 2}px`,
-      top: `${(cy - r.top) / S.zoom - (parseFloat(cs.borderTopWidth) || 0) - g.h / 2}px`,
+      left: `${(cx - origin.x) / S.zoom - (parseFloat(cs.borderLeftWidth) || 0) - g.w / 2}px`,
+      top: `${(cy - origin.y) / S.zoom - (parseFloat(cs.borderTopWidth) || 0) - g.h / 2}px`,
     }))
       set(key, value);
     if (autoTextHeight) {
@@ -488,9 +564,13 @@ export function createWorkspaceTransfer({
     if (!canEdit() || (cut && !S.editing) || !S.selection.length || S.text || editableTarget(event)) return false;
     try {
       const packet = capture(S.selection, { clipboard: true });
+      const board = S.selection[0].closest('[data-artboard]');
+      const origin = boardOrigin(board, packet.zoom);
       const data = JSON.stringify({
         app: 'dom-slides', version: 1, origin: location.origin,
         zoom: packet.zoom, cx: packet.cx, cy: packet.cy,
+        source: {document: documentKey, page: board.dataset.artboard,
+          x: (packet.cx - origin.x) / packet.zoom, y: (packet.cy - origin.y) / packet.zoom},
         objects: packet.objects.map(object => {
           const nodes = [object.template, ...object.template.querySelectorAll('*')];
           return {
@@ -569,7 +649,10 @@ export function createWorkspaceTransfer({
       if (!leaves.length) throw new Error('剪贴板对象没有可放置的元素');
       return { template: root, frames, leaves, autoTextHeight: object.autoTextHeight === true };
     });
-    return { objects, zoom: wire.zoom, cx: wire.cx, cy: wire.cy };
+    const source = wire.source;
+    const validSource = typeof source?.document === 'string' && typeof source.page === 'string' &&
+      [source.x, source.y].every(n => Number.isFinite(n) && Math.abs(n) < 1e7);
+    return { objects, zoom: wire.zoom, cx: wire.cx, cy: wire.cy, source: validSource ? source : null };
   }
   function pasteEvent(event) {
     if (!canEdit() || S.text || editableTarget(event)) return false;
@@ -582,11 +665,7 @@ export function createWorkspaceTransfer({
     let inserted = [];
     try {
       const packet = readPacket(data);
-      const r = board.getBoundingClientRect();
-      inserted = install(packet, board, {
-        copy: true,
-        center: { x: r.left + r.width / 2, y: r.top + r.height / 2 },
-      });
+      inserted = install(packet, board, {copy: true, center: pasteCenter(board, packet)});
       const after = snap(all(inserted));
       push({
         board,

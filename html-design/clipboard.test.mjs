@@ -381,3 +381,102 @@ test('crop frames and masked images copy as editable images; a failed copy clear
     assert.deepEqual(p.errors, []);
   } finally { await c.close(); }
 });
+
+const pageBox = node => {
+  const board = node.closest('[data-artboard]'), rect = node.getBoundingClientRect();
+  const page = board.getBoundingClientRect(), zoom = page.width / board.offsetWidth;
+  return {x: (rect.left - page.left) / zoom + board.scrollLeft,
+    y: (rect.top - page.top) / zoom + board.scrollTop, w: rect.width / zoom, h: rect.height / zoom};
+};
+
+test('cross-page paste preserves page coordinates even when the target is scrolled', async () => {
+  const c = await context(), p = await open(c);
+  try {
+    await p.locator('[data-el=title]').click();
+    const original = await p.locator('[data-el=title]').evaluate(pageBox);
+    await p.keyboard.press('ControlOrMeta+C');
+    await p.locator('.thumb[data-page-id=p2] .thumb-main').click();
+    const scroll = await p.locator('[data-artboard=p2]').evaluate(board => {
+      board.style.overflow = 'hidden';
+      const overflow = document.createElement('div');
+      Object.assign(overflow.style, {position: 'absolute', top: '900px', left: '1200px', width: '30px', height: '30px'});
+      board.append(overflow);
+      board.scrollTo(12, 17);
+      return [board.scrollLeft, board.scrollTop];
+    });
+    assert.deepEqual(scroll, [12, 17]);
+    await p.keyboard.press('ControlOrMeta+V');
+    const copy = p.locator('[data-artboard=p2] [data-el^=p2-copy-]');
+    const pasted = await copy.evaluate(pageBox);
+    for (const key of ['x', 'y', 'w', 'h']) assert.ok(Math.abs(pasted[key] - original[key]) < 1, key);
+    await p.locator('[data-act=undo]').click();
+    assert.equal(await copy.count(), 0);
+    assert.deepEqual(p.errors, []);
+  } finally { await c.close(); }
+});
+
+test('successive same-page pastes look for distinct unoccupied spots', async () => {
+  const c = await context(), p = await open(c);
+  try {
+    await p.locator('[data-el=image]').click();
+    const original = await p.locator('[data-el=image]').evaluate(pageBox);
+    const obstacle = await p.locator('[data-el=shape]').evaluate(pageBox);
+    await p.keyboard.press('ControlOrMeta+C');
+    await p.keyboard.press('ControlOrMeta+V');
+    await p.keyboard.press('ControlOrMeta+V');
+    const first = await p.locator('[data-el=p1-copy-1]').evaluate(pageBox);
+    const second = await p.locator('[data-el=p1-copy-2]').evaluate(pageBox);
+    const overlaps = (a, b) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 1 &&
+      Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 1;
+    for (const box of [first, second]) {
+      assert.equal(overlaps(box, original), false);
+      assert.equal(overlaps(box, obstacle), false);
+      assert.ok(box.x >= -1 && box.y >= -1 && box.x + box.w <= 801 && box.y + box.h <= 451);
+    }
+    assert.equal(overlaps(first, second), false);
+    assert.deepEqual(p.errors, []);
+  } finally { await c.close(); }
+});
+
+test('same-page paste finds a vacancy bounded by different obstacles', async () => {
+  const css = 'body{margin:0}section{position:relative;width:200px;height:160px;background:white}[data-el]{position:absolute;background:#999}';
+  const boxes = [[70,60,40,40],[140,70,40,70],[90,0,100,30],[10,30,80,20],[30,90,110,70]];
+  const shapes = boxes.map(([x,y,w,h], i) => `<div data-el="box${i}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px"></div>`).join('');
+  const c = await context(), p = await open(c, `<!doctype html><style>${css}</style><main data-stage><section data-artboard="p1">${shapes}</section></main>`);
+  try {
+    await p.locator('[data-el=box0]').click();
+    await p.keyboard.press('ControlOrMeta+C');
+    await p.keyboard.press('ControlOrMeta+V');
+    const {x,y,w,h} = await p.locator('[data-el=p1-copy-1]').evaluate(pageBox);
+    assert.ok(x >= -.1 && y >= -.1 && x+w <= 200.1 && y+h <= 160.1);
+    for (const [left,top,width,height] of boxes) {
+      assert.ok(x+w <= left+.1 || x >= left+width-.1 || y+h <= top+.1 || y >= top+height-.1);
+    }
+  } finally { await c.close(); }
+});
+
+test('pasting after a partial font resize tolerates empty text nodes without editing the target content', async () => {
+  const c = await context(), p = await open(c);
+  try {
+    const title = p.locator('[data-el=title]');
+    await title.dblclick();
+    await title.evaluate(el => {
+      const r = document.createRange();
+      r.setStart(el.firstChild,0);
+      r.setEnd(el.firstChild,2);
+      getSelection().removeAllRanges();
+      getSelection().addRange(r);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    await p.locator('[data-act=font-size-up]').click();
+    await p.keyboard.press('Escape');
+    const structure = () => title.evaluate(el => [...el.childNodes].map(node => [node.nodeType, node.textContent]));
+    const before = await structure();
+    assert.ok(before.some(([type,value]) => type === 3 && value === ''));
+    await p.locator('[data-el=image]').click();
+    await p.keyboard.press('ControlOrMeta+C');
+    await p.keyboard.press('ControlOrMeta+V');
+    assert.equal(await p.locator('[data-el=p1-copy-1]').count(),1);
+    assert.deepEqual(await structure(),before);
+  } finally { await c.close(); }
+});

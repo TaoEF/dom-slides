@@ -323,3 +323,66 @@ test("selection overlays never enter saved HTML and preview preserves native mod
     }
   }
 });
+
+test('clicking inside a marquee selection keeps the set and dragging the gap moves it as one action', async () => {
+  const p = await open();
+  try {
+    await zoom(p, 1);
+    await p.locator('[data-el=c]').evaluate(n => { n.style.cssText += ';left:225px;top:112px;width:50px;height:26px;padding:0'; });
+    await marquee(p, [95, 70], [310, 90]);
+    const board = await p.locator('[data-artboard=p1]').boundingBox();
+    const point = (x, y) => [board.x + x, board.y + y];
+    const count = () => p.locator('.selection-member').count();
+    assert.equal(await count(), 2);
+    await p.mouse.click(...point(250, 100));
+    assert.equal(await count(), 2);
+    await p.mouse.click(...point(250, 120));
+    assert.equal(await count(), 2);
+    assert.equal(await p.locator('[data-act=undo]').isDisabled(), true);
+    await p.mouse.move(...point(250, 100));
+    await p.mouse.down();
+    await p.keyboard.down('Alt');
+    await p.mouse.move(...point(270, 132), {steps: 4});
+    await p.mouse.up();
+    await p.keyboard.up('Alt');
+    near((await pos(p, 'a')).x, 120);
+    near((await pos(p, 'b')).y, 112);
+    near((await pos(p, 'c')).x, 225);
+    await p.locator('[data-act=undo]').click();
+    near((await pos(p, 'a')).x, 100);
+    near((await pos(p, 'b')).y, 80);
+    await p.mouse.click(...point(700, 390));
+    assert.equal(await count(), 0);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
+
+test('text context menu changes line height and negative tracking on the box without splitting markup', async () => {
+  const p = await open();
+  try {
+    const text = p.locator('[data-el=a]');
+    await text.evaluate(n => {
+      n.style.height = 'auto';
+      n.style.lineHeight = '1.25';
+      n.innerHTML = '<b>One</b><br>Two';
+    });
+    const before = (await text.boundingBox()).height;
+    await text.click({button: 'right'});
+    const line = p.getByRole('spinbutton', {name: '行高（倍）'});
+    const spacing = p.getByRole('spinbutton', {name: '字距（px）'});
+    assert.equal(await line.inputValue(), '1.25');
+    await line.fill('2');
+    await line.press('Enter');
+    assert.ok((await text.boundingBox()).height > before);
+    await spacing.fill('-1.5');
+    await spacing.press('Enter');
+    const styles = () => text.evaluate(n => [n.style.lineHeight, n.style.letterSpacing]);
+    assert.deepEqual(await styles(), ['2', '-1.5px']);
+    assert.equal(await text.innerHTML(), '<b>One</b><br>Two');
+    await p.locator('[data-act=undo]').click();
+    assert.deepEqual(await styles(), ['2', '']);
+    await p.locator('[data-act=redo]').click();
+    assert.deepEqual(await styles(), ['2', '-1.5px']);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});

@@ -42,7 +42,14 @@ export function groupProblem(nodes) {
 export function stableGroupMarkup(board) {
   const template = document.createElement('template');
   template.innerHTML = board.outerHTML;
-  return template.content.childNodes.length === 1 && template.content.firstChild.isEqualNode(board);
+  if (template.content.childNodes.length !== 1) return false;
+  const parsed = template.content.firstChild;
+  if (parsed.isEqualNode(board)) return true;
+  // Range-based text edits can split text without changing its HTML. Only
+  // normalize a detached copy, so live DOM identities and ranges are intact.
+  const normalized = template.content.ownerDocument.importNode(board, true);
+  normalized.normalize();
+  return parsed.isEqualNode(normalized);
 }
 const boxes = node => [...node.getClientRects()].map(r => [r.x,r.y,r.width,r.height]);
 const style = (node, pseudo, ignoredStyles) => {
