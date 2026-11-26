@@ -88,6 +88,33 @@ export function collectEditableSlide(board) {
       warnings.push(`${name}: 复杂文字对齐使用简化映射`);
     return cs.writingMode !== 'horizontal-tb' ? 'top' : anchor(alignment, reversed);
   };
+  const labelledObjects = [...board.querySelectorAll('[data-el]')];
+  const textBlocks = new Set(labelledObjects.filter(el => !el.querySelector('[data-el]')));
+  // A card can contain marked objects alongside unmarked notes. Collect the
+  // independent text boxes within those branches without traversing marked
+  // children again or moving the note text to the card's origin.
+  const addUnmarkedTextBlocks = parent => {
+    for (const child of parent.children) {
+      if (child.matches('[data-el],script,style,template,svg,canvas')) continue;
+      const style = getComputedStyle(child);
+      if (style.display === 'none' || style.opacity === '0') continue;
+      if (!child.querySelector('[data-el]') &&
+          ['block', 'flow-root', 'inline-block', 'list-item', 'table-cell'].includes(style.display) &&
+          child.textContent.trim()) textBlocks.add(child);
+      else addUnmarkedTextBlocks(child);
+    }
+  };
+  for (const el of labelledObjects) {
+    if (textBlocks.has(el)) continue;
+    let visible = true;
+    for (let node = el; node && node !== board; node = node.parentElement) {
+      if (getComputedStyle(node).opacity !== '0') continue;
+      visible = false;
+      break;
+    }
+    if (visible) addUnmarkedTextBlocks(el);
+  }
+
   const graphics = [...board.querySelectorAll('svg,canvas')];
   const outsideClippingAncestor = el => {
     const box = el.getBoundingClientRect();
@@ -244,9 +271,14 @@ export function collectEditableSlide(board) {
       if (shapeRadius > 0 && kind !== 'rect') warnings.push(`${name}: PPTX 原生形状不保留此圆角参数`);
     } else if (el.matches('svg,canvas')) {
       emit(el, { kind: 'graphic', ...box, name, index: graphics.indexOf(el) });
-    } else if (el.hasAttribute('data-el') && !el.querySelector('[data-el]') && el.textContent.trim()) {
+    } else if (textBlocks.has(el) && el.textContent.trim()) {
       // Keep authored breaks, not the browser's width-dependent soft wraps.
-      const runs = [], textItems = new Set();
+      const runs = [], textItems = new Set(), lineRects = [];
+      const keepSingleLine = ['inline', 'inline-block'].includes(cs.display) ||
+        el.matches('h1,h2,h3,h4,h5,h6,[role="heading"],[data-text-box]') ||
+        !!el.closest('header,footer') || ['nowrap', 'pre'].includes(cs.whiteSpace);
+      const textRange = keepSingleLine ? document.createRange() : null;
+      let wrappedRun = false;
       let lastKey = null, pendingSpace = null, pendingBlockBreak = false;
       const baseStyle = styles(cs, el.textContent, box.scale);
       const append = (text, options) => {
@@ -273,6 +305,12 @@ export function collectEditableSlide(board) {
             let item = node.parentElement;
             while (item !== el && item.parentElement !== el) item = item.parentElement;
             textItems.add(item); // actual direct item, or el for anonymous text
+            if (textRange) {
+              textRange.selectNodeContents(node);
+              const fragmentRects = [...textRange.getClientRects()].filter(rect => rect.width && rect.height);
+              if (fragmentRects.some(rect => Math.abs(rect.top - fragmentRects[0].top) > .5)) wrappedRun = true;
+              lineRects.push(...fragmentRects);
+            }
           }
           const parentStyle = getComputedStyle(node.parentElement);
           const options = styles(parentStyle, el.textContent, box.scale);
@@ -291,7 +329,7 @@ export function collectEditableSlide(board) {
           }
           return;
         }
-        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        if (node.nodeType !== Node.ELEMENT_NODE || (node !== el && textBlocks.has(node))) return;
         const nodeStyle = getComputedStyle(node);
         if (nodeStyle.display === 'none' || nodeStyle.visibility === 'hidden' || nodeStyle.opacity === '0') return;
         const options = styles(nodeStyle, el.textContent, box.scale);
@@ -311,21 +349,25 @@ export function collectEditableSlide(board) {
         if (block) { pendingSpace = null; pendingBlockBreak = true; }
       };
       visit(el);
-      const textRange = document.createRange();
-      textRange.selectNodeContents(el);
-      const lineRects = [...textRange.getClientRects()].filter(rect => rect.width && rect.height);
-      // Office can rewrap a single-line heading measured with browser font metrics.
-      const keepOneLine = (cs.display === 'inline-block' || el.matches('h1,h2,h3,h4,h5,h6,[role="heading"]')) &&
-        el.childNodes.length === 1 &&
-        el.firstChild.nodeType === Node.TEXT_NODE && !runs.some(run => run.text.includes('\n')) &&
-        lineRects.length === 1;
+      // Rich runs on one line can have distinct top and bottom metrics. Use
+      // the shared vertical band, while leaving wrapped boxes and breaks native.
+      const lineHeight = (parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2) * box.scale;
+      const tops = lineRects.map(r => r.top);
+      const oneVisualLine = lineRects.length === 1 || (lineRects.length > 1 && !wrappedRun &&
+        near(box.rotation, 0) && cs.writingMode === 'horizontal-tb' &&
+        Math.min(...lineRects.map(r => r.bottom)) > Math.max(...tops) &&
+        Math.max(...tops) - Math.min(...tops) < lineHeight * .8);
+      const nowrap = keepSingleLine && oneVisualLine && !runs.some(run => run.text.includes('\n'));
+      const padding = ['Top', 'Right', 'Bottom', 'Left'].map(side =>
+        ((parseFloat(cs[`padding${side}`]) || 0) + (parseFloat(cs[`border${side}Width`]) || 0)) * box.scale);
+      const textHeight = nowrap && cs.display === 'inline' && near(box.rotation, 0)
+        ? Math.max(box.h, lineHeight + padding[0] + padding[2]) : box.h;
       if (runs.length) emit(el, {
-        kind: 'text', ...box, name, runs, ...baseStyle,
-        nowrap: keepOneLine,
+        kind: 'text', ...box, h: textHeight, name, runs, ...baseStyle,
+        nowrap, shrink: nowrap && cs.display === 'inline-block',
         align: ['left', 'center', 'right', 'justify'].includes(cs.textAlign) ? cs.textAlign : 'left',
         valign: textVertical(el, cs, name, textItems),
-        lineHeight: (parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2) * box.scale,
-        padding: ['Top', 'Right', 'Bottom', 'Left'].map(side => ((parseFloat(cs[`padding${side}`]) || 0) + (parseFloat(cs[`border${side}Width`]) || 0)) * box.scale),
+        lineHeight, padding,
         href: el.closest('a')?.href,
       });
     }
@@ -408,7 +450,7 @@ export async function addEditableSlide({ pptx, slide, data, page, board, context
         x: position.x, y: position.y, w: position.w, h: position.h,
         // PptxGenJS 4 serializes text margins as left/right/bottom/top.
         margin: [item.padding[3], item.padding[1], item.padding[2], item.padding[0]].map(pt), valign: item.valign,
-        fit: item.nowrap ? 'shrink' : 'none', wrap: !item.nowrap,
+        fit: item.shrink ? 'shrink' : 'none', wrap: !item.nowrap,
         lineSpacing: pt(item.lineHeight), paraSpaceBefore: 0, paraSpaceAfter: 0,
         lang: 'zh-CN',
       });
