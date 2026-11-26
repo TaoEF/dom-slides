@@ -29,3 +29,28 @@ export function scaleText(metrics, k) {
     }
   }
 }
+
+export function setTextLineHeight(el, value) {
+  const style = el.style;
+  style.setProperty('line-height', value, style.getPropertyPriority('line-height'));
+  const savedTrim = el.dataset.lineHeightTrim;
+  const priority = style.getPropertyPriority('text-box-trim');
+  if (value === '') {
+    if (savedTrim !== undefined) {
+      if (style.textBoxTrim === 'trim-both') style.setProperty('text-box-trim', savedTrim, priority);
+      delete el.dataset.lineHeightTrim;
+    }
+    return;
+  }
+
+  const cs = getComputedStyle(el);
+  if (cs.writingMode !== 'horizontal-tb' ||
+      !['block', 'inline-block', 'flow-root', 'list-item'].includes(cs.display) ||
+      !['none', 'trim-end'].includes(cs.textBoxTrim)) return;
+  // Remove the external half-leading. CSS still lays out the content and
+  // keeps the chosen line height between baselines.
+  const original = style.textBoxTrim;
+  style.setProperty('text-box-trim', 'trim-both', priority);
+  if (getComputedStyle(el).textBoxTrim === 'trim-both') el.dataset.lineHeightTrim = original;
+  else style.setProperty('text-box-trim', original, priority);
+}

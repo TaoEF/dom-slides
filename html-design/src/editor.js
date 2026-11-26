@@ -12,7 +12,7 @@ import { createPersistence } from "./persistence.js";
 import { createReview } from './review.js';
 import { createViewport } from "./viewport.js";
 import { createPages } from "./pages.js";
-import { textMetrics, scaleText } from "./typography.js";
+import { textMetrics, scaleText, setTextLineHeight } from "./typography.js";
 import { createTextLayout } from "./text-layout.js";
 import { icon } from "./icons.js";
 import { documentColors, hexColor, hexToHsv, hsvToHex, recommendedColors } from './colors.js';
@@ -820,6 +820,18 @@ import {
       };
     }
 
+    function insideMultiSelection(e) {
+      if (S.selection.length < 2 || e.button !== 0 || e.shiftKey || e.ctrlKey || e.metaKey) return false;
+      const frame = selectionFrame(S.selection, selectionDirection.angle);
+      const {clientX: x, clientY: y} = e;
+      if (!frame) {
+        const r = unionRect(S.selection);
+        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+      }
+      const r = frame.angle * Math.PI / 180, dx = x - frame.cx, dy = y - frame.cy;
+      return Math.abs(dx * Math.cos(r) + dy * Math.sin(r)) <= frame.width / 2 &&
+        Math.abs(dy * Math.cos(r) - dx * Math.sin(r)) <= frame.height / 2;
+    }
     function startDrag(e, el) {
       const b = el.closest("[data-artboard]"),
         s = scaleOf(b),
@@ -1501,12 +1513,30 @@ import {
       if (!el || el.scrollHeight <= el.clientHeight + 1) return;
       // Keep the author's spare height; only expand a frame when content exceeds it.
       const cs = getComputedStyle(el);
+      // Trimmed lines can contribute to scrollHeight beyond the visible font
+      // box. Keep natural-height text in flow so that spacing can shrink again.
+      if (cs.textBoxTrim === 'trim-both' && cs.maxHeight === 'none' &&
+          (el.computedStyleMap?.().get('height')?.toString() ?? el.style.height) === 'auto' &&
+          trimmedTextFits(el, cs)) return;
       const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
       const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
       const height = Math.ceil(el.scrollHeight + (cs.boxSizing === 'border-box' ? border : -padding));
       el.style.maxHeight = 'none';
       el.style.height = `${height}px`;
       el.style.blockSize = `${height}px`;
+    }
+    function trimmedTextFits(el, cs) {
+      const {supported, angle, scale} = elementGeometry(el);
+      if (!supported || Math.abs(angle) > .01) return false;
+      const bottom = el.getBoundingClientRect().bottom - (parseFloat(cs.borderBottomWidth) + el.scrollTop) * scale;
+      const text = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      for (let node = text.nextNode(); node; node = text.nextNode()) {
+        if (!node.data.trim()) continue;
+        range.selectNodeContents(node);
+        if ([...range.getClientRects()].some(rect => rect.bottom > bottom + 1)) return false;
+      }
+      return true;
     }
     function startText(el, x, y) {
       if (
@@ -1707,6 +1737,7 @@ import {
           !!el.textContent.trim();
       $(".text-tools").hidden = !text;
       $(".more-text-section").hidden = !text;
+      $(".text-spacing-fields").hidden = !text || !isTextObject(el);
       $(".image-tools").hidden = !image;
       const shape = !multi && el.matches('svg[data-shape]');
       $(".shape-tools").hidden = !shape;
@@ -2008,6 +2039,10 @@ import {
         e.preventDefault();
         ui.activeElement?.blur();
         endText();
+        if (clickedBoard === S.current && insideMultiSelection(e)) {
+          startDrag(e, S.sel);
+          return;
+        }
         const raw = markEditableObject(e.target, clickedBoard || S.current) || e.target.closest("[data-el]");
         if (S.group && raw && !S.group.contains(raw)) S.group = null;
         const el = logicalTarget(raw, S.group);
@@ -2150,6 +2185,7 @@ import {
       }
     });
     function closeMenus() {
+      if (ui.activeElement?.matches('[data-text-spacing]')) ui.activeElement.blur();
       ui.querySelectorAll("[data-menu]").forEach((n) => {
         n.hidden = true;
       });
@@ -2162,6 +2198,9 @@ import {
         wasOpen = !panel.hidden;
       closeMenus();
       if (wasOpen && anchor) return;
+      if (name === 'element' && !$('.text-spacing-fields').hidden) {
+        for (const input of panel.querySelectorAll('[data-text-spacing]')) syncTextSpacing(input, S.sel);
+      }
       panel.hidden = false;
       anchor?.setAttribute("aria-expanded", "true");
       const r = anchor?.getBoundingClientRect(),
@@ -2561,6 +2600,28 @@ import {
         closeMenus();
       runAction(act, btn);
     });
+    function syncTextSpacing(input, el) {
+      const cs = getComputedStyle(el), prop = input.dataset.textSpacing;
+      const value = parseFloat(cs.getPropertyValue(prop));
+      const number = prop === 'line-height' ? value / parseFloat(cs.fontSize) : value;
+      input.value = Number.isFinite(number) ? String(Number(number.toFixed(3))) : '';
+    }
+    function applyTextSpacing(input) {
+      const el = S.sel;
+      if (!canMutate() || S.selection.length !== 1 || !isTextObject(el)) return;
+      if (input.validity.badInput || input.validity.rangeUnderflow) {
+        syncTextSpacing(input, el);
+        return;
+      }
+      const before = snap([el]), prop = input.dataset.textSpacing;
+      if (prop === 'line-height') setTextLineHeight(el, input.value);
+      else el.style.setProperty(prop, input.value === '' ? '' : input.value + 'px',
+        el.style.getPropertyPriority(prop));
+      growTextToFit(el);
+      commit(before, el.closest('[data-artboard]'));
+      drawSel();
+      syncTextSpacing(input, el);
+    }
     function syncArrowMenu(el) {
       const params = arrowMenuParameters(el), panel = $('.arrow-parameter-section');
       panel.hidden = !params.length;
@@ -2632,6 +2693,10 @@ import {
     }
     ui.addEventListener('input', e => previewShapeParam(e.target));
     ui.addEventListener('change', e => {
+      if (e.target.matches('[data-text-spacing]')) {
+        applyTextSpacing(e.target);
+        return;
+      }
       if (!(e.target.dataset?.shapeProp || e.target.dataset?.arrowParam)) return;
       previewShapeParam(e.target);
       finishShapeParam(e.target);
@@ -2641,6 +2706,13 @@ import {
     });
     ui.addEventListener("keydown", (e) => {
       if (e.target.matches('.rotation-angle')) return;
+      if (e.target.matches('[data-text-spacing]') && e.key !== 'Escape') {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.target.blur();
+        }
+        return;
+      }
       if (e.target.matches('.palette-hue,.palette-hex,.palette-sv') && e.key.startsWith('Arrow')) return;
       if (!modal.hidden && e.key === "Tab") {
         const controls = [
