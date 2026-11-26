@@ -1516,13 +1516,27 @@ import {
       // Trimmed lines can contribute to scrollHeight beyond the visible font
       // box. Keep natural-height text in flow so that spacing can shrink again.
       if (cs.textBoxTrim === 'trim-both' && cs.maxHeight === 'none' &&
-          (el.computedStyleMap?.().get('height')?.toString() ?? el.style.height) === 'auto') return;
+          (el.computedStyleMap?.().get('height')?.toString() ?? el.style.height) === 'auto' &&
+          trimmedTextFits(el, cs)) return;
       const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
       const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
       const height = Math.ceil(el.scrollHeight + (cs.boxSizing === 'border-box' ? border : -padding));
       el.style.maxHeight = 'none';
       el.style.height = `${height}px`;
       el.style.blockSize = `${height}px`;
+    }
+    function trimmedTextFits(el, cs) {
+      const {supported, angle, scale} = elementGeometry(el);
+      if (!supported || Math.abs(angle) > .01) return false;
+      const bottom = el.getBoundingClientRect().bottom - (parseFloat(cs.borderBottomWidth) + el.scrollTop) * scale;
+      const text = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      for (let node = text.nextNode(); node; node = text.nextNode()) {
+        if (!node.data.trim()) continue;
+        range.selectNodeContents(node);
+        if ([...range.getClientRects()].some(rect => rect.bottom > bottom + 1)) return false;
+      }
+      return true;
     }
     function startText(el, x, y) {
       if (

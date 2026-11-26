@@ -413,3 +413,30 @@ test('text spacing changes baseline distance and tracking without splitting mark
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });
+
+test('trimmed line spacing grows a stretched text frame if its later lines would clip', async () => {
+  const p = await open();
+  try {
+    const text = p.locator('[data-el=a]');
+    await text.evaluate(el => {
+      Object.assign(el.style, {
+        top: '50px', bottom: '340px', width: '300px', height: 'auto',
+        overflow: 'hidden', lineHeight: '1.2',
+      });
+      el.innerHTML = '第一行<br>第二行<br>第三行';
+    });
+    assert.equal(await text.evaluate(el => el.clientHeight), 60);
+    await text.click({button: 'right'});
+    const line = p.getByRole('spinbutton', {name: '行高（倍）'});
+    await line.fill('3');
+    await line.press('Enter');
+    const fits = await text.evaluate(el => {
+      const lastLine = document.createRange();
+      lastLine.selectNodeContents(el.lastChild);
+      return el.getBoundingClientRect().bottom >= lastLine.getBoundingClientRect().bottom;
+    });
+    assert.equal(fits, true);
+    assert.ok(await text.evaluate(el => el.clientHeight) > 100);
+    assert.deepEqual(p.errors, []);
+  } finally { await p.close(); }
+});
