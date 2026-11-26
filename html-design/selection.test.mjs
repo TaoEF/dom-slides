@@ -357,32 +357,59 @@ test('clicking inside a marquee selection keeps the set and dragging the gap mov
   } finally { await p.close(); }
 });
 
-test('text context menu changes line height and negative tracking on the box without splitting markup', async () => {
+test('text spacing changes baseline distance and tracking without splitting markup', async () => {
   const p = await open();
   try {
+    await zoom(p, 1);
     const text = p.locator('[data-el=a]');
     await text.evaluate(n => {
       n.style.height = 'auto';
       n.style.lineHeight = '1.25';
-      n.innerHTML = '<b>One</b><br>Two';
+      n.style.textBoxTrim = 'none';
+      n.innerHTML = '<b>甲 One</b><br>乙 Two';
     });
-    const before = (await text.boundingBox()).height;
+    const lines = () => text.evaluate(el => {
+      const range = document.createRange();
+      const top = el.getBoundingClientRect().top;
+      return [el.firstChild.firstChild, el.lastChild].map(node => {
+        range.selectNodeContents(node);
+        return range.getBoundingClientRect().top - top;
+      });
+    });
+    const styles = () => text.evaluate(n => [n.style.lineHeight, n.style.letterSpacing, n.style.textBoxTrim]);
+    const untrimmed = await lines();
+    const initialHeight = (await text.boundingBox()).height;
     await text.click({button: 'right'});
     const line = p.getByRole('spinbutton', {name: '行高（倍）'});
     const spacing = p.getByRole('spinbutton', {name: '字距（px）'});
     assert.equal(await line.inputValue(), '1.25');
-    await line.fill('2');
-    await line.press('Enter');
-    assert.ok((await text.boundingBox()).height > before);
-    await spacing.fill('-1.5');
-    await spacing.press('Enter');
-    const styles = () => text.evaluate(n => [n.style.lineHeight, n.style.letterSpacing]);
-    assert.deepEqual(await styles(), ['2', '-1.5px']);
-    assert.equal(await text.innerHTML(), '<b>One</b><br>Two');
+    const set = async (field, value) => { await field.fill(value); await field.press('Enter'); };
+
+    await set(line, '2');
+    const atTwo = await lines();
+    const heightAtTwo = (await text.boundingBox()).height;
+    assert.ok(atTwo[0] <= untrimmed[0], 'first application does not add leading above the text');
+    assert.ok(heightAtTwo > initialHeight);
+    await set(line, '3');
+    const atThree = await lines();
+    near(atThree[0], atTwo[0]);
+    assert.ok(Math.abs((atThree[1] - atTwo[1]) - 20) < 1);
+    const growth = (await text.boundingBox()).height - heightAtTwo;
+    assert.ok(Math.abs(growth - 20) < 1, JSON.stringify({ growth, heightAtTwo }));
+    assert.equal(await text.evaluate(n => n.style.height), 'auto');
+    await set(spacing, '-1.5');
+    assert.deepEqual(await styles(), ['3', '-1.5px', 'trim-both']);
+    assert.equal(await text.innerHTML(), '<b>甲 One</b><br>乙 Two');
     await p.locator('[data-act=undo]').click();
-    assert.deepEqual(await styles(), ['2', '']);
+    assert.deepEqual(await styles(), ['3', '', 'trim-both']);
+    await p.locator('[data-act=undo]').click();
+    assert.deepEqual(await styles(), ['2', '', 'trim-both']);
     await p.locator('[data-act=redo]').click();
-    assert.deepEqual(await styles(), ['2', '-1.5px']);
+    assert.deepEqual(await styles(), ['3', '', 'trim-both']);
+    await text.click({button: 'right'});
+    await set(line, '');
+    assert.deepEqual(await styles(), ['', '', 'none']);
+    assert.equal(await text.getAttribute('data-line-height-trim'), null);
     assert.deepEqual(p.errors, []);
   } finally { await p.close(); }
 });

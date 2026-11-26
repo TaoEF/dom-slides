@@ -12,7 +12,7 @@ import { createPersistence } from "./persistence.js";
 import { createReview } from './review.js';
 import { createViewport } from "./viewport.js";
 import { createPages } from "./pages.js";
-import { textMetrics, scaleText } from "./typography.js";
+import { textMetrics, scaleText, setTextLineHeight } from "./typography.js";
 import { createTextLayout } from "./text-layout.js";
 import { icon } from "./icons.js";
 import { documentColors, hexColor, hexToHsv, hsvToHex, recommendedColors } from './colors.js';
@@ -1513,6 +1513,10 @@ import {
       if (!el || el.scrollHeight <= el.clientHeight + 1) return;
       // Keep the author's spare height; only expand a frame when content exceeds it.
       const cs = getComputedStyle(el);
+      // Trimmed lines can contribute to scrollHeight beyond the visible font
+      // box. Keep natural-height text in flow so that spacing can shrink again.
+      if (cs.textBoxTrim === 'trim-both' && cs.maxHeight === 'none' &&
+          (el.computedStyleMap?.().get('height')?.toString() ?? el.style.height) === 'auto') return;
       const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
       const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
       const height = Math.ceil(el.scrollHeight + (cs.boxSizing === 'border-box' ? border : -padding));
@@ -2596,8 +2600,8 @@ import {
         return;
       }
       const before = snap([el]), prop = input.dataset.textSpacing;
-      if (input.value === '') el.style.removeProperty(prop);
-      else el.style.setProperty(prop, prop === 'line-height' ? input.value : input.value + 'px',
+      if (prop === 'line-height') setTextLineHeight(el, input.value);
+      else el.style.setProperty(prop, input.value === '' ? '' : input.value + 'px',
         el.style.getPropertyPriority(prop));
       growTextToFit(el);
       commit(before, el.closest('[data-artboard]'));

@@ -4805,6 +4805,25 @@ property of their respective owners.
       }
     }
   }
+  function setTextLineHeight(el, value) {
+    const style2 = el.style;
+    style2.setProperty("line-height", value, style2.getPropertyPriority("line-height"));
+    const savedTrim = el.dataset.lineHeightTrim;
+    const priority = style2.getPropertyPriority("text-box-trim");
+    if (value === "") {
+      if (savedTrim !== void 0) {
+        if (style2.textBoxTrim === "trim-both") style2.setProperty("text-box-trim", savedTrim, priority);
+        delete el.dataset.lineHeightTrim;
+      }
+      return;
+    }
+    const cs = getComputedStyle(el);
+    if (cs.writingMode !== "horizontal-tb" || !["block", "inline-block", "flow-root", "list-item"].includes(cs.display) || !["none", "trim-end"].includes(cs.textBoxTrim)) return;
+    const original = style2.textBoxTrim;
+    style2.setProperty("text-box-trim", "trim-both", priority);
+    if (getComputedStyle(el).textBoxTrim === "trim-both") el.dataset.lineHeightTrim = original;
+    else style2.setProperty("text-box-trim", original, priority);
+  }
 
   // node_modules/@chenglou/pretext/dist/generated/engine-break-data.js
   var classMaps = { "chromium/line_normal": [0, 182], "chromium/line_normal_cj": [1, 182], "apple/line_normal": [2, 183], "apple/line": [3, 183], "apple/line_cj": [4, 183], "chromium/char": [5, 148], "apple/char": [6, 149], "gecko/line": [7, 196], "gecko/east_asian_width": [8, 38], "chromium/script": [9, 80] };
@@ -10883,6 +10902,7 @@ property of their respective owners.
       function growTextToFit(el) {
         if (!el || el.scrollHeight <= el.clientHeight + 1) return;
         const cs = getComputedStyle(el);
+        if (cs.textBoxTrim === "trim-both" && cs.maxHeight === "none" && (el.computedStyleMap?.().get("height")?.toString() ?? el.style.height) === "auto") return;
         const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
         const padding = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
         const height = Math.ceil(el.scrollHeight + (cs.boxSizing === "border-box" ? border : -padding));
@@ -11995,10 +12015,10 @@ property of their respective owners.
           return;
         }
         const before = snap([el]), prop = input.dataset.textSpacing;
-        if (input.value === "") el.style.removeProperty(prop);
+        if (prop === "line-height") setTextLineHeight(el, input.value);
         else el.style.setProperty(
           prop,
-          prop === "line-height" ? input.value : input.value + "px",
+          input.value === "" ? "" : input.value + "px",
           el.style.getPropertyPriority(prop)
         );
         growTextToFit(el);
