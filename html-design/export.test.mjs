@@ -501,3 +501,49 @@ test('review P2: actual text-item align-self overrides container cross alignment
   const {xml,zip}=await slideXml(html),structure=await inspectSlide(xml),notes=await zip.file('ppt/notesSlides/notesSlide1.xml').async('string');
   for(const [id,,,anchor,approx] of cases){const text=structure.leaves.find(n=>n.name===id&&n.xml.includes('<p:txBody>'));assert.ok(text,id);assert.match(text.xml,new RegExp(`<a:bodyPr[^>]*anchor="${anchor}"`),id);assert.match(text.xml,/<a:bodyPr[^>]*wrap="square"/);if(approx)assert.match(notes,new RegExp(id+': .*近似'),id);else assert.doesNotMatch(notes,new RegExp(id+':'),id+' maps representably');}
 });
+
+test('PPTX keeps one-line editor text and includes unmarked notes inside editable cards', async () => {
+  const {xml} = await slideXml(`<!doctype html><style>
+    [data-artboard]{width:900px;height:500px;position:relative;font:24px/36px Arial}
+    .note{position:absolute;top:220px;left:40px;width:760px}
+  </style><main data-stage><section data-artboard="p1">
+    <div data-el="heading" data-text-box>编辑器标题 <b>与原地验证</b></div>
+    <div data-el="card">
+      <p data-el="ordinary">Editable paragraph in the card.</p>
+      <div><span data-el="inline" data-text-box><b>第一段</b>继续显示。</span></div>
+      <div class="note"><b>预计：</b>独立说明完整保留。</div>
+      <div style="opacity:0;display:flex"><div>HIDDEN NOT A NOTE</div></div>
+    </div>
+    <div data-el="wrapped" data-text-box style="width:85px">浏览器里已经换行</div>
+    <footer style="display:flex"><span data-el="folio">09</span></footer>
+    <h2 data-el="tight-line" style="width:112px;font:24px/18px Arial">Two lines appear</h2>
+  </section></main>`);
+  for (const name of ['heading', 'inline', 'folio']) {
+    const shape = namedShape(xml, name);
+    assert.match(shape, /<a:bodyPr[^>]*wrap="none"/);
+    assert.doesNotMatch(shape, /<a:(?:normAutofit|spAutoFit)/);
+  }
+  assert.match(namedShape(xml, 'inline'), /<a:t>第一段<\/a:t>.*<a:t>继续显示。<\/a:t>/s);
+  const note = shapesOf(xml).find(shape => shape.includes('独立说明完整保留。'));
+  assert.ok(note);
+  assert.match(note, /<a:off x="381000" y="2095500"/);
+  assert.match(note, /<a:rPr[^>]*sz="1800"[^>]*b="1"/);
+  assert.equal((xml.match(/<a:t>独立说明完整保留。<\/a:t>/g) || []).length, 1);
+  assert.doesNotMatch(xml, /HIDDEN NOT A NOTE/);
+  for (const name of ['ordinary','wrapped','tight-line']) assert.match(namedShape(xml, name), /<a:bodyPr[^>]*wrap="square"/);
+});
+
+test('editor font size export scales the entire slide and its native items together', async () => {
+  const {xml, zip} = await slideXml(`<!doctype html><style>
+    [data-artboard]{width:600px;height:300px;position:relative}
+    p{position:absolute;top:30px;left:12px;width:240px;margin:0;font:24px/36px Arial}
+  </style><main data-stage data-pptx-font-size="editor"><section data-artboard="p1">
+    <p data-el="body">Editable 24 point text</p>
+  </section></main>`);
+  const shape = namedShape(xml, 'body');
+  assert.match(shape, /sz="2400"/);
+  assert.match(shape, /<a:spcPts val="3600"/);
+  assert.match(shape, /<a:off x="152400" y="381000"/);
+  assert.match(shape, /<a:ext cx="3048000" cy="457200"/);
+  assert.match(await zip.file('ppt/presentation.xml').async('string'), /<p:sldSz cx="7620000" cy="3810000"/);
+});

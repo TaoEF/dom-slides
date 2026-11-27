@@ -7,7 +7,7 @@ owners:
   - html-design/pptx.mjs
   - html-design/src/export.js
   - html-design/export-cli.mjs
-updated: 2026-11-23
+updated: 2026-11-26
 sources:
   - path: html-design/export.mjs
     status: current
@@ -56,7 +56,9 @@ confidence: high
 
 「导出 → 下载 HTML」使用点击时的序列化 DOM，将可读取的图片、CSS（含 url() 字体和背景资源）及外部编辑器脚本内联为单文件；链接改为绝对 URL。资源读取失败、暂不支持的媒体嵌入或 CSS @import 会中止下载，避免发出表面成功但离线缺失内容的文件。普通保存与源码下载仍保持源文件引用，不承担离线打包语义。
 
-PPTX 每个文字元素对应一个可编辑文本框。普通段落开启 `wrap="square"`，不自动缩小字号或按文字撑宽；浏览器实际单行、只有一个文本节点的标题与 inline-block 短标签使用 `wrap="none"` 与 shrink，避免 PowerPoint 字体度量差异引入折行。多行标题继续使用可重排文本框。只保留 HTML 的显式换行（br、块段落、white-space 保留的换行），不将浏览器因当前宽度产生的软折行固化。普通空白按 CSS 合并，跨 span 保留词间空格，pre/pre-wrap/break-spaces 保留空格。富文本样式继续按 run 映射，混合字号或基线差异不能凭字符几何位置推断换行。Flex/Grid 子项会被浏览器块化，横排子项不能因此各自变成硬段落；正 column-gap 简化为词间空格，Flex column 子项保留纵向分隔。
+PPTX 每个文字元素对应一个可编辑文本框。普通段落开启 `wrap="square"`，不自动缩小字号或按文字撑宽；浏览器实测单行的标题、页眉页脚、编辑器文本框和行内标签使用 `wrap="none"`。以文字 Range 的行带判定富文本是否同一行，已发生换行的文本片段与紧行高下重叠的多行继续保持可重排。标题和普通行内文字保留字号，inline-block 短标签延续自动适应。多行标题继续使用可重排文本框。只保留 HTML 的显式换行（br、块段落、white-space 保留的换行），不将浏览器因当前宽度产生的软折行固化。普通空白按 CSS 合并，跨 span 保留词间空格，pre/pre-wrap/break-spaces 保留空格。富文本样式继续按 run 映射，混合字号或基线差异不能凭字符几何位置推断换行。Flex/Grid 子项会被浏览器块化，横排子项不能因此各自变成硬段落；正 column-gap 简化为词间空格，Flex column 子项保留纵向分隔。含有已标记子对象的卡片也收集其独立的未标记文本块，按文字块自身坐标导出，并避免重复发出已标记的文字。
+
+带 `data-pptx-font-size="editor"` 的舞台按 72 个画布单位对应 1 英寸导出 PPTX，保留编辑器字号数值及版面比例。此模式同时缩放尺寸、坐标、字号、线宽和间距。常规文档仍按 96 个单位对应 1 英寸。
 
 完全位于 `overflow:hidden/clip/scroll/auto` 祖先可见范围之外的对象在 PPTX 收集阶段跳过，避免原 HTML 中被容器遮住的形状重新出现在幻灯片上；横向与纵向分别按其 overflow 值判断。此规则只处理完全不可见对象；部分越界的祖先裁切仍是现有映射边界，不能宣称与浏览器像素一致。
 

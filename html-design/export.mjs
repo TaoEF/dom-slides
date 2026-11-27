@@ -116,7 +116,12 @@ export async function exportDocument({ html, baseUrl, title = 'design', format }
       throw new Error('PPTX 的所有页面需要相同比例，请统一画板比例后重试');
     }
     const pptx = new PptxGenJS();
-    const width = first.width / 96, height = first.height / 96;
+    const editorFontSizes = await page.locator('[data-stage]').getAttribute('data-pptx-font-size') === 'editor';
+    // Scale the slide and all of its items together. Only changing the font
+    // size would alter wrapping and placement in the exported composition.
+    const units = editorFontSizes ? 72 : 96;
+    const width = first.width / units, height = first.height / units;
+    if (Math.max(width, height) > 56) throw new Error('PPTX 画板宽高不能超过 56 英寸');
     pptx.defineLayout({ name: 'HTML_DESIGN', width, height });
     pptx.layout = 'HTML_DESIGN';
     pptx.title = title;
@@ -128,7 +133,7 @@ export async function exportDocument({ html, baseUrl, title = 'design', format }
       const slide = pptx.addSlide();
       const data = await slides.nth(i).evaluate(collectEditableSlide);
       grouping.push({ owners: data.items.map(item => item.groupPath), groups: data.groups, pictures: data.items.map(item => item.crop || item.mask ? {crop:item.crop,mask:item.mask,maskGeometry:item.maskGeometry} : null) });
-      await addEditableSlide({ pptx, slide, data, page, board: slides.nth(i), context, scale: first.width / sizes[i].width });
+      await addEditableSlide({ pptx, slide, data, page, board: slides.nth(i), context, scale: (first.width / sizes[i].width) * (96 / units) });
       if (options.onSlideImage) await options.onSlideImage(i, await slides.nth(i).screenshot({ type: 'png', scale: 'device', animations: 'disabled' }));
     }
     let bytes = await pptx.write({ outputType: 'nodebuffer', compression: true });
